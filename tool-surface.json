@@ -1,0 +1,244 @@
+{
+  "schema": "mcp-tool-surface/v1",
+  "server": "fd-erp-ledger-mcp",
+  "entry_path": "/fd-erp-ledger-mcp",
+  "product_line": "erp",
+  "product_line_note": "ERP 是板块级标签（board），不是五条 ladder 业务线之一；双语同形（EN=ERP / 中文=ERP）。见 /tmp/erp-kernel-contract.md（本 change 的 controlling contract）。",
+  "hosting": [
+    "shared-instance"
+  ],
+  "hosting_note": "默认共享实例（本 apply 交付的 publish-ready 清单即此形态）；另规划 appliance / 私有化部署三档（vertical-appliance-delivery，packer 可打进整机包），该适配归 task 7.2、本 apply 未交付、挂账。",
+  "description": "账本内核 MCP（ERP 板块）：复式事件账 + 确认车道 + 只读对账滩头。写路径只出 proposal，确认门是唯一落账路径（借贷必平由 DB 触发器强制，已落账分录 append-only）；余额由分录确定性重算、无直写余额字段；对账引擎对外部系统零写入、四类差异双侧原始引用留痕。如实守界：不做单体 ERP 应用/表单 UI、不自研开票/税务申报、不执行资金归集/代收代付/分账（二清红线，资金走客户自选持牌通道）。BYOK 凭证经环境变量注入、零落库零日志。",
+  "skills_eligible_for_packs": [
+    "erp-reconciliation",
+    "erp-proposal-discipline"
+  ],
+  "skills_note": "候选技能名占位（plausible list）；本 apply 未创建这些技能，不宣称其已在别处存在。仅表示未来 pack 可引用的工具面方向。",
+  "tool_annotations": {
+    "submit_proposal": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 只创建 proposals 行、绝不直接落账；同 stable_id 重复提交返回首次结果（唯一索引去重）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "FX_UNSOURCED",
+        "PROPOSAL_STATE",
+        "NOT_WIRED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "list_proposals": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 分页查询本租户 proposal 列表及状态（待确认/已确认/已拒绝）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "confirm_proposal": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 确认门；确认后按复式分录落账，借贷必平由 DB 约束强制、不平整笔拒绝；同 stable_id 幂等",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "UNBALANCED",
+        "APPEND_ONLY",
+        "FX_UNSOURCED",
+        "PROPOSAL_STATE",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "reject_proposal": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 拒绝 proposal，留审计痕迹且不落账；同 stable_id 幂等",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "PROPOSAL_STATE",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "query_balance": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 按科目/币种查询余额；余额由 journal_entries 确定性重算，无直写余额字段",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "query_entries": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 分页查询已落账分录（原币/折算、出处、来源引用、时间戳、冲正关联）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "APPEND_ONLY",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "run_reconciliation": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "long-running · 运行两源流水对账（只读滩头，对外部系统零写入），立即返回 task_id；幂等不产生破坏性副作用，但会创建/推进对账任务与报告状态故非 read-only",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "NOT_WIRED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "get_recon_report": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 按 task_id 查询对账任务状态/进度/结果 + 四类差异清单（缺失/多余/金额不符/状态不符，双侧原始引用）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "RECON_TASK_NOT_FOUND",
+        "TENANT_DENIED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    }
+  },
+  "tool_groups": [
+    {
+      "group": "proposal",
+      "level": "commercial",
+      "tools": [
+        "submit_proposal",
+        "list_proposals",
+        "confirm_proposal",
+        "reject_proposal"
+      ],
+      "description": "拟落账事件（proposal）车道：写路径只出 proposal，确认门是唯一落账路径，拒绝留审计痕且不落账；稳定 id 幂等去重。"
+    },
+    {
+      "group": "ledger",
+      "level": "commercial",
+      "tools": [
+        "query_balance",
+        "query_entries"
+      ],
+      "description": "账本只读面：余额由分录确定性重算、分录 append-only；均带租户查询闸与 rows_returned 计量戳。"
+    },
+    {
+      "group": "recon",
+      "level": "commercial",
+      "tools": [
+        "run_reconciliation",
+        "get_recon_report"
+      ],
+      "description": "对账只读滩头：两源流水对齐、四类差异双侧引用；run 立即返回 task_id（长任务），get 查状态/进度/结果，对外部系统零写入。"
+    }
+  ],
+  "error_codes": {
+    "closed_set": true,
+    "source": "镜像 fd_erp_ledger_mcp/error_codes.py 的 CATALOG（运行时真值）；selfcheck 离线以常量镜像核对，不 import fastmcp/psycopg。新增码必须先在运行时 CATALOG 登记再同步本清单。",
+    "semantic_classes": [
+      "not_wired",
+      "not_found",
+      "upstream",
+      "invalid_argument"
+    ],
+    "codes": [
+      "NOT_WIRED",
+      "NOT_FOUND",
+      "UPSTREAM_UNAVAILABLE",
+      "INVALID_ARGUMENT",
+      "SCHEMA_OUTDATED",
+      "TENANT_DENIED",
+      "UNBALANCED",
+      "APPEND_ONLY",
+      "FX_UNSOURCED",
+      "PROPOSAL_STATE",
+      "RECON_TASK_NOT_FOUND",
+      "INTERNAL"
+    ],
+    "shape": "每个失败返回机器可读 code（取自封闭集合）+ 可读描述 + default_hint 修正建议；不伪装空成功。"
+  },
+  "naming_convention": {
+    "order": "verb_noun",
+    "applies_to": "all_tools",
+    "note": "8 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get + 名词）；无历史遗留名词序工具需兼容。"
+  },
+  "registry": {
+    "expected_tool_count": 8
+  },
+  "output_structure": {
+    "declared": [
+      "list_proposals",
+      "query_entries",
+      "get_recon_report"
+    ],
+    "undeclared": [
+      "submit_proposal",
+      "confirm_proposal",
+      "reject_proposal",
+      "query_balance",
+      "run_reconciliation"
+    ],
+    "tool_fields": {
+      "list_proposals": [
+        "proposals[]",
+        "next_cursor",
+        "has_more",
+        "rows_returned"
+      ],
+      "query_entries": [
+        "entries[]",
+        "next_cursor",
+        "has_more",
+        "rows_returned"
+      ],
+      "get_recon_report": [
+        "task_id",
+        "status",
+        "progress",
+        "diffs[]",
+        "next_cursor",
+        "has_more",
+        "rows_returned"
+      ]
+    },
+    "notes": "分页用键集游标（非 OFFSET）；统一体积上限，超限返回 truncated 标记 + 原始规模 + 续读游标（mcp-result-contract）；每次响应含 rows_returned 计量戳（流式/写成功不可计行数时落 0）。其余 5 工具显式登记为 undeclared，杜绝『既未声明也未登记』的静默空缺。"
+  },
+  "notes": {
+    "compliance_boundary": "二清红线：资金归集/代收代付/分账平台只做对账与核对指令层，资金走客户自选持牌通道；开票/税务申报不自研（挂账），账内可记录发票类事件参与对账、票据本体由客户既有合规渠道处理。",
+    "honest_caliber": "本 manifest 与 deploy 清单均为 publish-ready 工件：网关路由未上线、registry 快照未 live 写入、谦面市场未上架、镜像未构建。Live publish / gateway rollout / registry push / 官网 deploy 均属 DEPLOY 步骤（需 live 凭据），本 apply 挂账。",
+    "no_internal_group": "8 工具全部 commercial，无 internal 组；消费侧暴露集 ⊆ commercial 集闭合。"
+  }
+}

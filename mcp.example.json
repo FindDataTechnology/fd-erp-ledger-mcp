@@ -1,0 +1,15 @@
+{
+  "$comment": [
+    "fd-erp-ledger-mcp 客户端连接示例（LOCAL PLACEHOLDER，仅供形态说明）。",
+    "本服务在本 apply 为 publish-ready、尚未上线：网关路由未注册、registry 快照未 live 写入、镜像未构建。",
+    "下面的 127.0.0.1 端口是本机占位，不是任何真实公网主机；<port> 请替换为你本地/私有化实例实际监听端口。",
+    "本文件不含任何凭据、token 或密钥；真实鉴权由部署侧环境变量/Secret 注入（BYOK，零落库零日志）。"
+  ],
+  "mcpServers": {
+    "fd-erp-ledger-mcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:<port>/mcp",
+      "$note": "HTTP (streamable-http) transport；上线后应改用经登记的直连/网关端点，而非本机占位地址。"
+    }
+  }
+}

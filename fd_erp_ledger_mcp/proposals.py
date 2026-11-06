@@ -1,0 +1,185 @@
+"""确认车道（erp-ledger-kernel agent 只写 proposal）。
+
+- submit_proposal 只创建 pending 提案，绝不改变账本状态。
+- confirm_proposal 是唯一落账路径；对齐柏讯 propose/confirm 契约的
+  fleet identity turn 车道（fleet=/post=/title=/target= 语义字段）。
+- 幂等：同 stable_id 重复提交返回首次结果（唯一索引 + SELECT 回读）。
+- 拒绝留痕不落账。
+"""
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from .config import Settings
+from .db import fetch_all, fetch_one
+from .errors import ErpError
+from .ledger import build_reversal_lines, post_lines, _normalize_lines
+from .tenancy import audit
+
+
+def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
+                    stable_id: str, lines: list[dict[str, Any]],
+                    source_ref: str | None = None,
+                    kind: str = "journal", reversal_of: str | None = None,
+                    lane_fleet: str | None = None, lane_post: str | None = None,
+                    lane_title: str | None = None, lane_target: str | None = None,
+                    submitted_by: str = "agent") -> dict[str, Any]:
+    if not stable_id or not str(stable_id).strip():
+        raise ErpError("INVALID_ARGUMENT", "stable_id 不能为空")
+    if kind not in ("journal", "reversal"):
+        raise ErpError("INVALID_ARGUMENT", "kind 须为 journal 或 reversal")
+    if kind == "reversal" and not reversal_of:
+        raise ErpError("INVALID_ARGUMENT", "冲正提案须带 reversal_of（原 txn_id）")
+
+    # 幂等：已存在同 stable_id 直接返回首次结果，不重复入账、不报错。
+    existing = fetch_one(
+        conn, "SELECT * FROM proposals WHERE tenant_id=%s AND stable_id=%s",
+        (tenant_id, stable_id),
+    )
+    if existing is not None:
+        return _proposal_view(existing, duplicate=True)
+
+    # 冲正：从原分录派生反向分录（忽略传入 lines，保证 append-only 更正不可伪造）
+    normalized: list[dict[str, Any]]
+    if kind == "reversal":
+        normalized = build_reversal_lines(conn, tenant_id, reversal_of)
+    else:
+        normalized = _normalize_lines(lines, settings=settings, conn=conn)
+
+    payload = json.dumps({"lines": normalized, "kind": kind}, ensure_ascii=False)
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO proposals(tenant_id, stable_id, kind, payload, status, "
+                "reversal_of, source_ref, lane_fleet, lane_post, lane_title, lane_target) "
+                "VALUES (%s,%s,%s,%s::jsonb,'pending',%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (tenant_id, stable_id) DO NOTHING",
+                (tenant_id, stable_id, kind, payload, reversal_of, source_ref,
+                 lane_fleet, lane_post, lane_title, lane_target),
+            )
+    row = fetch_one(
+        conn, "SELECT * FROM proposals WHERE tenant_id=%s AND stable_id=%s",
+        (tenant_id, stable_id),
+    )
+    audit(conn, tenant_id, "proposal_submitted", actor=submitted_by,
+          target=stable_id, detail={"kind": kind, "reversal_of": reversal_of})
+    return _proposal_view(row)
+
+
+def _proposal_view(row: dict[str, Any] | None, *, duplicate: bool = False) -> dict[str, Any]:
+    if row is None:
+        raise ErpError("NOT_FOUND", "proposal 不存在")
+    return {
+        "proposal_id": row["id"],
+        "stable_id": row["stable_id"],
+        "status": row["status"],
+        "kind": row["kind"],
+        "reversal_of": row["reversal_of"],
+        "source_ref": row["source_ref"],
+        "created_at": str(row["created_at"]),
+        "duplicate": duplicate,
+        "idempotent_hit": duplicate,
+    }
+
+
+def list_proposals(conn: Any, tenant_id: str, status: str | None = None) -> list[dict[str, Any]]:
+    sql = ("SELECT id, stable_id, kind, status, reversal_of, source_ref, "
+           "lane_fleet, lane_post, lane_title, lane_target, created_at, "
+           "decided_at, decided_by, decision_note "
+           "FROM proposals WHERE tenant_id=%s ")
+    params: list[Any] = [tenant_id]
+    if status:
+        sql += "AND status=%s "
+        params.append(status)
+    sql += "ORDER BY created_at, id"
+    rows = fetch_all(conn, sql, tuple(params))
+    for r in rows:
+        for k in ("created_at", "decided_at"):
+            if r[k] is not None:
+                r[k] = str(r[k])
+    return rows
+
+
+def confirm_proposal(conn: Any, *, settings: Settings, tenant_id: str,
+                     proposal_id: int | None = None, stable_id: str | None = None,
+                     confirmed_by: str = "human") -> dict[str, Any]:
+    if not proposal_id and not stable_id:
+        raise ErpError("INVALID_ARGUMENT", "须提供 proposal_id 或 stable_id")
+    with conn.cursor() as cur:
+        if proposal_id:
+            cur.execute("SELECT * FROM proposals WHERE tenant_id=%s AND id=%s",
+                        (tenant_id, proposal_id))
+        else:
+            cur.execute("SELECT * FROM proposals WHERE tenant_id=%s AND stable_id=%s",
+                        (tenant_id, stable_id))
+        cols = [d.name for d in cur.description]
+        raw = cur.fetchone()
+    row = dict(zip(cols, raw)) if raw else None
+    if row is None:
+        raise ErpError("NOT_FOUND", "proposal 不存在",
+                       detail={"proposal_id": proposal_id, "stable_id": stable_id})
+    if row["status"] == "confirmed":
+        # 已确认：返回首次落账结果（幂等），不重复落账
+        prior = fetch_one(
+            conn, "SELECT txn_id FROM journal_entries WHERE tenant_id=%s AND stable_id=%s LIMIT 1",
+            (tenant_id, row["stable_id"]),
+        )
+        return {"status": "already_confirmed", "proposal_id": row["id"],
+                "stable_id": row["stable_id"],
+                "txn_id": prior["txn_id"] if prior else None,
+                "idempotent_hit": True}
+    if row["status"] != "pending":
+        raise ErpError("PROPOSAL_STATE", f"proposal 状态为 {row['status']}，不可确认")
+
+    payload = row["payload"] if isinstance(row["payload"], dict) else json.loads(row["payload"])
+    lines = payload["lines"]
+    posted = post_lines(
+        conn, settings=settings, tenant_id=tenant_id,
+        stable_id=row["stable_id"], lines=lines,
+        source_ref=row["source_ref"], confirmed_by=confirmed_by,
+        is_reversal=(row["kind"] == "reversal"),
+        reversal_of=row["reversal_of"],
+    )
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE proposals SET status='confirmed', decided_at=now(), "
+                "decided_by=%s WHERE tenant_id=%s AND id=%s AND status='pending'",
+                (confirmed_by, tenant_id, row["id"]),
+            )
+    audit(conn, tenant_id, "proposal_confirmed", actor=confirmed_by,
+          target=row["stable_id"], detail={"txn_id": posted["txn_id"],
+                                          "kind": row["kind"], "lines": posted["lines"]})
+    return {"status": "confirmed", "proposal_id": row["id"],
+            "stable_id": row["stable_id"], "txn_id": posted["txn_id"],
+            "lines": posted["lines"], "idempotent_hit": False}
+
+
+def reject_proposal(conn: Any, *, tenant_id: str, proposal_id: int | None = None,
+                    stable_id: str | None = None, rejected_by: str = "human",
+                    reason: str | None = None) -> dict[str, Any]:
+    if not proposal_id and not stable_id:
+        raise ErpError("INVALID_ARGUMENT", "须提供 proposal_id 或 stable_id")
+    with conn.transaction():
+        with conn.cursor() as cur:
+            if proposal_id:
+                cur.execute(
+                    "UPDATE proposals SET status='rejected', decided_at=now(), "
+                    "decided_by=%s, decision_note=%s "
+                    "WHERE tenant_id=%s AND id=%s AND status='pending' RETURNING id, stable_id",
+                    (rejected_by, reason, tenant_id, proposal_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE proposals SET status='rejected', decided_at=now(), "
+                    "decided_by=%s, decision_note=%s "
+                    "WHERE tenant_id=%s AND stable_id=%s AND status='pending' RETURNING id, stable_id",
+                    (rejected_by, reason, tenant_id, stable_id),
+                )
+            row = cur.fetchone()
+    if row is None:
+        raise ErpError("PROPOSAL_STATE", "proposal 不存在或已裁决，不可拒绝")
+    audit(conn, tenant_id, "proposal_rejected", actor=rejected_by,
+          target=row[1], detail={"reason": reason})
+    return {"status": "rejected", "proposal_id": row[0], "stable_id": row[1]}

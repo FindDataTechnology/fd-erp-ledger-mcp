@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fd-erp-ledger-mcp"
+version = "0.1.0"
+description = "ERP 账本内核 MCP：复式事件账 + 确认车道 + 只读对账滩头，行业无关、多租户、多币种、append-only 存证。"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "FindDataTechnology" }]
+dependencies = [
+    "fastmcp>=3.4",
+    "click",
+    "uvicorn",
+    "psycopg[binary,pool]>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+fd-erp-ledger-mcp = "fd_erp_ledger_mcp.cli:cli"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["fd_erp_ledger_mcp*"]
+
+[tool.setuptools.package-data]
+fd_erp_ledger_mcp = ["migrations/*.sql"]

@@ -1,0 +1,140 @@
+# =============================================================================
+# fd-erp-ledger-mcp — publish-READY 参考清单（NOT YET ROLLED OUT）
+# -----------------------------------------------------------------------------
+# ⚠️ 本清单【不是】线上事实源，【不可直接 kubectl apply】：
+#    - 镜像 sha-0000000 是占位符（NOT-YET-BUILT，尚未构建）；直接 apply 会 ImagePullBackOff。
+#    - 未做 ArgoCD 同步、未改网关路由、未分配 NodePort/端口台账、registry 快照未写入。
+#    - 线上唯一事实源是 fd-infra-deploy 仓库 all-services/prod/（由 ArgoCD selfHeal 同步）；
+#      本 apply【未改动】 fd-infra-deploy，发版时须把本清单落到那里并提交。
+#
+# 形态（mcp-service-deploy 标配件）：单副本 / 数据 PVC / 缓存目录 env / fsGroup 属主修复 /
+#   就绪+存活探针 / CPU+内存 requests+limits / 非 root / 不可变 sha-* 镜像 / HTTP on 0.0.0.0 /
+#   鉴权与 DSN/BYOK 全由环境变量经 Secret 注入（本仓零明文密钥）。
+#
+# 固定发版通道（全部为 DEPLOY 步骤，本 apply 挂账，见 deploy/README.md）：
+#   gitee push → Jenkins 构建 → Harbor 不可变 sha-* tag → 修改 fd-infra-deploy 中 image tag
+#   并提交 → ArgoCD 自动滚动 → 端口台账 PORTS.md 登记 → 网关路由 / registry 快照刷新。
+#
+# 工具面：8 工具全 commercial（见 ../tool-surface.json）；负责人：ERP 板块（add-erp-domain）。
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fd-erp-ledger-mcp-data
+  namespace: fd-prod
+  labels:
+    app.kubernetes.io/name: fd-erp-ledger-mcp
+    app.kubernetes.io/part-of: finddata
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fd-erp-ledger-mcp
+  namespace: fd-prod
+  labels:
+    app.kubernetes.io/name: fd-erp-ledger-mcp
+    app.kubernetes.io/part-of: finddata
+    app.kubernetes.io/environment: production
+spec:
+  replicas: 1            # 账本内核单实例（proposal/确认门/对账任务状态避免多写竞态）
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fd-erp-ledger-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fd-erp-ledger-mcp
+        app.kubernetes.io/part-of: finddata
+        app.kubernetes.io/environment: production
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000     # PVC 挂载点属主修复，保证 uid 1000 能在 /data 下建缓存/报告子目录
+      containers:
+        - name: mcp
+          # ⚠️ 占位镜像标签：本镜像【尚未构建】(NOT-YET-BUILT)。禁止 :latest / 浮动标签。
+          #    真实标签由 Jenkins 产出形如 sha-<commit> 的不可变 tag，发版时经
+          #    fd-infra-deploy 的 image tag bump 落地后由 ArgoCD 滚动；此处仅占位。
+          image: ccr.ccs.tencentyun.com/finddata/fd-erp-ledger-mcp:sha-0000000
+          imagePullPolicy: IfNotPresent
+          # HTTP (streamable-http) transport，绑定 0.0.0.0；transport/host/port 由命令固定，
+          # 鉴权/DSN/BYOK 由下方 env(envFrom Secret) 注入 —— env-driven auth，仓内零明文。
+          command: ["fd-erp-ledger-mcp", "serve", "--transport", "http", "--host", "0.0.0.0", "--port", "8300"]
+          ports:
+            - name: http
+              containerPort: 8300
+            - name: health
+              containerPort: 8301
+          env:
+            # 缓存/报告副本落 PVC 挂载点（非 root 可写，避免 /app/.cache PermissionError）
+            - name: ERP_LEDGER_CACHE_DIR
+              value: "/data/cache"
+            - name: ERP_LEDGER_REPORT_DIR
+              value: "/data/reports"
+            # 本位币（合同：CNY）
+            - name: ERP_LEDGER_BASE_CCY
+              value: "CNY"
+            # 就绪/存活探针端口（与镜像内 /health 约定对齐）
+            - name: ERP_LEDGER_HEALTH_PORT
+              value: "8301"
+          # 凭据全部经环境变量注入（env-driven auth）：Postgres DSN、服务 bearer、
+          # BYOK/汇率源凭据等。Secret 由部署侧 out-of-band 创建，【本仓不含任何明文密钥】。
+          envFrom:
+            - secretRef:
+                name: fd-erp-ledger-mcp-env
+                optional: false
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: fd-erp-ledger-mcp-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fd-erp-ledger-mcp
+  namespace: fd-prod
+  labels:
+    app.kubernetes.io/name: fd-erp-ledger-mcp
+    app.kubernetes.io/part-of: finddata
+spec:
+  # publish-ready 阶段用 ClusterIP：尚未暴露到网关、未分配 NodePort。
+  # 发版（DEPLOY 步骤，挂账）时改为 type: NodePort，按 PORTS.md 先行登记端口台账
+  # （冻结端口保护）后回填 nodePort，再改网关路由与 registry 快照；本 apply 均未做。
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: fd-erp-ledger-mcp
+  ports:
+    - name: http
+      port: 8300
+      targetPort: http
