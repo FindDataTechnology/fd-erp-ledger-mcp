@@ -10,8 +10,7 @@
   "hosting_note": "默认共享实例（本 apply 交付的 publish-ready 清单即此形态）；另规划 appliance / 私有化部署三档（vertical-appliance-delivery，packer 可打进整机包），该适配归 task 7.2、本 apply 未交付、挂账。",
   "description": "账本内核 MCP（ERP 板块）：复式事件账 + 确认车道 + 只读对账滩头。写路径只出 proposal，确认门是唯一落账路径（借贷必平由 DB 触发器强制，已落账分录 append-only）；余额由分录确定性重算、无直写余额字段；对账引擎对外部系统零写入、四类差异双侧原始引用留痕。如实守界：不做单体 ERP 应用/表单 UI、不自研开票/税务申报、不执行资金归集/代收代付/分账（二清红线，资金走客户自选持牌通道）。BYOK 凭证经环境变量注入、零落库零日志。",
   "skills_eligible_for_packs": [
-    "erp-reconciliation",
-    "erp-proposal-discipline"
+    "erp-ledger-discipline"
   ],
   "skills_note": "候选技能名占位（plausible list）；本 apply 未创建这些技能，不宣称其已在别处存在。仅表示未来 pack 可引用的工具面方向。",
   "tool_annotations": {
