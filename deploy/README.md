@@ -9,7 +9,7 @@
 |---|---|
 | `k8s/erp-ledger-mcp.yaml` | Deployment + Service + PVC 参考清单，按 `mcp-service-deploy` 标配件编写（数据 PVC、缓存目录 env、`fsGroup` 属主修复、就绪/存活探针、CPU/内存 requests+limits、非 root、不可变 `sha-*` 镜像占位、HTTP on `0.0.0.0`、鉴权/DSN/BYOK 经环境变量注入）。 |
 | `../mcp.example.json` | 客户端连接示例（`mcpServers` 条目 + 本机 `http://127.0.0.1:<port>/mcp` 占位）。 |
-| `../tool-surface.json` | `mcp-tool-surface/v1` 上牌清单（8 工具全 commercial + 行为属性 + 封闭错误码集合 + 输出结构）。 |
+| `../tool-surface.json` | `mcp-tool-surface/v1` 上牌清单（19 工具全 commercial + 行为属性 + 封闭错误码集合 + 输出结构）。 |
 | `../scripts/selfcheck_surface.py` | 离线 stdlib-only 双向断言（manifest ↔ 运行时真值 + 暴露 ⊆ commercial）。 |
 
 ## 如实边界（务必读）

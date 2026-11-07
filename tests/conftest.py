@@ -35,7 +35,8 @@ def _reset_db(settings):
                 cur.execute("SELECT set_config('erp.allow_maintenance','on', true)")
                 cur.execute(
                     "TRUNCATE proposals, journal_entries, fx_facts, recon_reports, "
-                    "recon_task_items, audit, accounts RESTART IDENTITY CASCADE"
+                    "recon_task_items, audit, accounts, billing_rules, fee_details, "
+                    "credit_registry, credit_reservations RESTART IDENTITY CASCADE"
                 )
     finally:
         conn.close()

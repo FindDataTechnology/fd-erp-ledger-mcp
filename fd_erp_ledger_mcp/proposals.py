@@ -17,6 +17,15 @@ from .errors import ErpError
 from .ledger import build_reversal_lines, post_lines, _normalize_lines
 from .tenancy import audit
 
+# 机器车道白名单（add-supply-chain-vertical 任务 1.x）：计费引擎（submitted_by=
+# "billing-engine"）生成的 proposal 科目限 1300 在途结算款 / 4000 营业收入 /
+# 费用类白名单（5100 平台及支付费用 / 5200 其他经营费用）；禁 1000/2100/3000/3100。
+# 白名单机制天然排除禁用科目（1000 现金、2100 预收、3000/3100 权益均不在集内）。
+# 计费引擎 MUST NOT 绕过确认车道：它只经 submit_proposal 出 proposal，
+# 落账仍只能走 confirm_proposal 确认门。
+MACHINE_LANE_SUBMITTER = "billing-engine"
+MACHINE_LANE_ACCOUNTS = frozenset({"1300", "4000", "5100", "5200"})
+
 
 def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
                     stable_id: str, lines: list[dict[str, Any]],
@@ -46,6 +55,19 @@ def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
         normalized = build_reversal_lines(conn, tenant_id, reversal_of)
     else:
         normalized = _normalize_lines(lines, settings=settings, conn=conn)
+
+    # 机器车道闸：凡以 billing-engine 名义提交的 proposal，科目必须落在白名单内。
+    # 冲正分录由原分录派生（原行已过闸），天然保持白名单口径。
+    if submitted_by == MACHINE_LANE_SUBMITTER:
+        bad = sorted({ln["account_code"] for ln in normalized
+                      if ln["account_code"] not in MACHINE_LANE_ACCOUNTS})
+        if bad:
+            raise ErpError(
+                "INVALID_ARGUMENT",
+                f"机器车道（billing-engine）proposal 含白名单外科目：{', '.join(bad)}",
+                detail={"forbidden_accounts": bad,
+                        "allowed_accounts": sorted(MACHINE_LANE_ACCOUNTS)},
+            )
 
     payload = json.dumps({"lines": normalized, "kind": kind}, ensure_ascii=False)
     with conn.transaction():

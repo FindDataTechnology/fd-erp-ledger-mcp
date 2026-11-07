@@ -8,7 +8,7 @@
     "shared-instance"
   ],
   "hosting_note": "默认共享实例（本 apply 交付的 publish-ready 清单即此形态）；另规划 appliance / 私有化部署三档（vertical-appliance-delivery，packer 可打进整机包），该适配归 task 7.2、本 apply 未交付、挂账。",
-  "description": "账本内核 MCP（ERP 板块）：复式事件账 + 确认车道 + 只读对账滩头。写路径只出 proposal，确认门是唯一落账路径（借贷必平由 DB 触发器强制，已落账分录 append-only）；余额由分录确定性重算、无直写余额字段；对账引擎对外部系统零写入、四类差异双侧原始引用留痕。如实守界：不做单体 ERP 应用/表单 UI、不自研开票/税务申报、不执行资金归集/代收代付/分账（二清红线，资金走客户自选持牌通道）。BYOK 凭证经环境变量注入、零落库零日志。",
+  "description": "账本内核 MCP（ERP 板块）：复式事件账 + 确认车道 + 只读对账滩头 + 计费规则引擎 + 信用额度。写路径只出 proposal，确认门是唯一落账路径（借贷必平由 DB 触发器强制，已落账分录与费用明细 append-only）；余额由分录确定性重算、无直写余额字段；对账引擎对外部系统零写入、四类差异双侧原始引用留痕。计费：规则版本化 + 人工审批上线 + 冲突拦截 + 计费快照幂等可重算 + 红冲留痕 + 四层溯源 + 无出处费率拒绝；计费落账走 billing-engine 机器车道 proposal（1300/4000/费用类白名单），不绕过确认门。信用：额度口径=账本衍生（limit − 1300 应收余额 − active 占用），占用为备忘性质不写复式分录。如实守界：不做单体 ERP 应用/表单 UI、不自研开票/税务申报、不执行资金归集/代收代付/分账（二清红线，资金走客户自选持牌通道）。BYOK 凭证经环境变量注入、零落库零日志。",
   "skills_eligible_for_packs": [
     "erp-ledger-discipline"
   ],
@@ -131,6 +131,163 @@
         "TENANT_DENIED",
         "UPSTREAM_UNAVAILABLE"
       ]
+    },
+    "submit_billing_rule": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "behavior": "write · 登记计费规则新版本（draft→pending_approval）；同 rule_key 版本递增、重复提交产生新版本故非幂等；无出处费率拒绝（RATE_UNSOURCED）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "RATE_UNSOURCED",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "approve_billing_rule": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 规则确认门（pending_approval→active，人工确认、不接受程序自审自批）；同维度冲突未处置拒绝上线；同 rule_key 旧 active 版本随新版本退役",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "RULE_STATE",
+        "RULE_CONFLICT",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "list_billing_rules": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 分页查询计费规则（含版本、状态机、config、rate_source）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "bill_event": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 按 active 规则对事件计费，写 fee_details（append-only，快照锁定规则版本）+ 组 billing-engine 机器车道分录 proposal（不直接落账）；同 stable_id 重推返回首次结果",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "RATE_UNSOURCED",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "list_fees": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 分页查询费用明细（含红冲反向行 status='reversed' + reversal_of 关联）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "get_fee_detail": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 费用详情 + 四层溯源链（费用项→业务单据→作业事件→计费规则版本）+ 快照确定性重算",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "reverse_fee": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 红冲费用：新增反向明细行（reversal_of 关联，原行原样保留，append-only 无改/删路径）；原分录已落账时组冲正 proposal；同 fee 幂等",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "APPEND_ONLY",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "simulate_billing": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 按历史事件集试算新旧规则费用差异（零写入；费率出处纪律同正式规则）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "RATE_UNSOURCED",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "reserve_credit": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 占用客户信用额度（备忘性质，不写复式分录）；额度不足拒绝（CREDIT_EXCEEDED 含额度明细）；同 stable_id 幂等返回首次结果",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "CREDIT_EXCEEDED",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "release_credit": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 释放信用占用（reserved→released，幂等；备忘表状态推进，非账本事实）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "query_credit": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 查询额度位：limit / ar_balance（1300 分录确定性重算）/ reserved / available",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
     }
   },
   "tool_groups": [
@@ -162,6 +319,31 @@
         "get_recon_report"
       ],
       "description": "对账只读滩头：两源流水对齐、四类差异双侧引用；run 立即返回 task_id（长任务），get 查状态/进度/结果，对外部系统零写入。"
+    },
+    {
+      "group": "billing",
+      "level": "commercial",
+      "tools": [
+        "submit_billing_rule",
+        "approve_billing_rule",
+        "list_billing_rules",
+        "bill_event",
+        "list_fees",
+        "get_fee_detail",
+        "reverse_fee",
+        "simulate_billing"
+      ],
+      "description": "计费规则引擎：规则版本化 + 人工审批确认门（冲突未处置拦截上线）+ 事件/期间快照计费（stable_id 幂等、快照锁定可重算）+ 红冲留痕（原行原样）+ 四层溯源 + 无出处费率拒绝 + 试算零写入；费用落账走 billing-engine 机器车道 proposal（科目白名单），不绕过确认门。"
+    },
+    {
+      "group": "credit",
+      "level": "commercial",
+      "tools": [
+        "reserve_credit",
+        "release_credit",
+        "query_credit"
+      ],
+      "description": "信用额度：available = limit − 1300 应收余额（分录确定性重算）− active 占用；占用为备忘性质不写复式分录；额度不足 CREDIT_EXCEEDED 带明细。"
     }
   ],
   "error_codes": {
@@ -185,6 +367,10 @@
       "FX_UNSOURCED",
       "PROPOSAL_STATE",
       "RECON_TASK_NOT_FOUND",
+      "RATE_UNSOURCED",
+      "RULE_CONFLICT",
+      "RULE_STATE",
+      "CREDIT_EXCEEDED",
       "INTERNAL"
     ],
     "shape": "每个失败返回机器可读 code（取自封闭集合）+ 可读描述 + default_hint 修正建议；不伪装空成功。"
@@ -192,23 +378,34 @@
   "naming_convention": {
     "order": "verb_noun",
     "applies_to": "all_tools",
-    "note": "8 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get + 名词）；无历史遗留名词序工具需兼容。"
+    "note": "19 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get/approve/bill/reverse/simulate/reserve/release + 名词）；无历史遗留名词序工具需兼容。"
   },
   "registry": {
-    "expected_tool_count": 8
+    "expected_tool_count": 19
   },
   "output_structure": {
     "declared": [
       "list_proposals",
       "query_entries",
-      "get_recon_report"
+      "get_recon_report",
+      "list_billing_rules",
+      "list_fees"
     ],
     "undeclared": [
       "submit_proposal",
       "confirm_proposal",
       "reject_proposal",
       "query_balance",
-      "run_reconciliation"
+      "run_reconciliation",
+      "submit_billing_rule",
+      "approve_billing_rule",
+      "bill_event",
+      "get_fee_detail",
+      "reverse_fee",
+      "simulate_billing",
+      "reserve_credit",
+      "release_credit",
+      "query_credit"
     ],
     "tool_fields": {
       "list_proposals": [
@@ -231,13 +428,25 @@
         "next_cursor",
         "has_more",
         "rows_returned"
+      ],
+      "list_billing_rules": [
+        "rules[]",
+        "next_cursor",
+        "has_more",
+        "rows_returned"
+      ],
+      "list_fees": [
+        "fees[]",
+        "next_cursor",
+        "has_more",
+        "rows_returned"
       ]
     },
-    "notes": "分页用键集游标（非 OFFSET）；统一体积上限，超限返回 truncated 标记 + 原始规模 + 续读游标（mcp-result-contract）；每次响应含 rows_returned 计量戳（流式/写成功不可计行数时落 0）。其余 5 工具显式登记为 undeclared，杜绝『既未声明也未登记』的静默空缺。"
+    "notes": "分页用键集游标（非 OFFSET）；统一体积上限，超限返回 truncated 标记 + 原始规模 + 续读游标（mcp-result-contract）；每次响应含 rows_returned 计量戳（流式/写成功不可计行数时落 0）。其余 14 工具显式登记为 undeclared，杜绝『既未声明也未登记』的静默空缺。"
   },
   "notes": {
-    "compliance_boundary": "二清红线：资金归集/代收代付/分账平台只做对账与核对指令层，资金走客户自选持牌通道；开票/税务申报不自研（挂账），账内可记录发票类事件参与对账、票据本体由客户既有合规渠道处理。",
+    "compliance_boundary": "二清红线：资金归集/代收代付/分账平台只做对账与核对指令层，资金走客户自选持牌通道；开票/税务申报不自研（挂账），账内可记录发票类事件参与对账、票据本体由客户既有合规渠道处理。信用占用为备忘性质，不执行资金放款/扣款。",
     "honest_caliber": "本 manifest 与 deploy 清单均为 publish-ready 工件：网关路由未上线、registry 快照未 live 写入、谦面市场未上架、镜像未构建。Live publish / gateway rollout / registry push / 官网 deploy 均属 DEPLOY 步骤（需 live 凭据），本 apply 挂账。",
-    "no_internal_group": "8 工具全部 commercial，无 internal 组；消费侧暴露集 ⊆ commercial 集闭合。"
+    "no_internal_group": "19 工具全部 commercial，无 internal 组；消费侧暴露集 ⊆ commercial 集闭合。"
   }
 }

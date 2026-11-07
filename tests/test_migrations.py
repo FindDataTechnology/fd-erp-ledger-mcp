@@ -44,8 +44,13 @@ def test_schema_version_gate_fails_fast_on_missing(settings):
     scratch_dsn = make_conninfo(**scratch)
     admin = psycopg.connect(settings.database_url, autocommit=True)
     try:
-        admin.execute("DROP DATABASE IF EXISTS erp_gate_scratch")
-        admin.execute("CREATE DATABASE erp_gate_scratch")
+        try:
+            admin.execute("DROP DATABASE IF EXISTS erp_gate_scratch")
+            admin.execute("CREATE DATABASE erp_gate_scratch")
+        except psycopg.errors.InsufficientPrivilege:
+            # 测试账号无 CREATEDB（如共享实例的 app 角色）：无法建 scratch 库，
+            # 该场景只能在有权限环境验证，这里如实跳过而非伪装通过。
+            pytest.skip("测试账号无 CREATEDB 权限，无法创建 scratch 库验证 fail-fast 闸")
     finally:
         admin.close()
     s = Settings(database_url=scratch_dsn, tenant_id="x")
@@ -58,8 +63,12 @@ def test_schema_version_gate_fails_fast_on_missing(settings):
         with pytest.raises(ErpError) as ei:
             assert_schema_version(s)
         assert ei.value.code == "SCHEMA_OUTDATED"
-        assert ei.value.detail["required"] == "0002_universal_accounts"
+        assert ei.value.detail["required"] == "0003_billing"
     finally:
+        from fd_erp_ledger_mcp.db import _pools  # 关闭临时库连接池再 DROP
+        pool = _pools.pop(scratch_dsn, None)
+        if pool is not None:
+            pool.close()
         admin = psycopg.connect(settings.database_url, autocommit=True)
         try:
             admin.execute("DROP DATABASE IF EXISTS erp_gate_scratch")

@@ -6,21 +6,22 @@
 
 双向断言（对应 spec「selfcheck 双向断言」）：
   方向 1 · 一致（manifest ↔ 运行时注册真值）：
-      manifest 的 tool_annotations / tool_groups 工具集，必须与 canonical 8 工具集
-      （hardcode 自 /tmp/erp-kernel-contract.md 的 EXACT 8 名）逐名相等。
+      manifest 的 tool_annotations / tool_groups 工具集，必须与 canonical 19 工具集
+      （hardcode：8 基础账本 + 计费 8 + 信用 3，add-supply-chain-vertical 任务 1.x/4.2）
+      逐名相等。
       由于离线不加载运行时，canonical 集合即运行时注册真值的离线镜像；
       新增/删除工具而 manifest 未同步 → 失败并点名差异。
   方向 2 · 闭合（对外暴露集 ⊆ commercial 集）：
       消费侧/网关欲暴露的工具集必须落在 manifest 的 commercial 集内。
-      默认暴露集 = canonical 8；可用 --expose 传入逗号分隔工具名模拟某个 pack
+      默认暴露集 = canonical 19；可用 --expose 传入逗号分隔工具名模拟某个 pack
       的声明，越界（点名 internal/不存在工具）即失败。
 
 另有静态完整性断言（闭环，不依赖运行时）：
-  - registry.expected_tool_count == 8
+  - registry.expected_tool_count == 19
   - 每个 commercial 工具声明齐全的行为属性（只读/破坏性/幂等/openWorld 四 hint）
   - 封闭错误码集合非空、语义类 ≥4 类可区分、且与运行时 CATALOG 镜像一致；
     每个工具自报的 error_codes ⊆ 该封闭集合（不允许临时造码）
-  - output_structure 的 declared ∪ undeclared == 全 8 工具且互斥（无静默空缺），
+  - output_structure 的 declared ∪ undeclared == 全 19 工具且互斥（无静默空缺），
     每个 declared 工具都有 tool_fields
 
 退出码：0 = PASS / 1 = FAIL（逐条列出差异）。
@@ -39,7 +40,7 @@ SERVER_NAME = "fd-erp-ledger-mcp"
 
 # ---- canonical 真值（offline 镜像；改动请先改 /tmp/erp-kernel-contract.md）----
 
-# 8 EXACT commercial 工具名（controlling contract §"8 MCP commercial tools"）
+# 19 EXACT commercial 工具名（controlling contract 8 基础 + 计费 8 + 信用 3）
 CANONICAL_TOOLS = frozenset({
     "submit_proposal",
     "list_proposals",
@@ -49,8 +50,21 @@ CANONICAL_TOOLS = frozenset({
     "query_entries",
     "run_reconciliation",
     "get_recon_report",
+    # 计费（add-supply-chain-vertical 任务 1.x）
+    "submit_billing_rule",
+    "approve_billing_rule",
+    "list_billing_rules",
+    "bill_event",
+    "list_fees",
+    "get_fee_detail",
+    "reverse_fee",
+    "simulate_billing",
+    # 信用（add-supply-chain-vertical 任务 4.2）
+    "reserve_credit",
+    "release_credit",
+    "query_credit",
 })
-EXPECTED_TOOL_COUNT = 8
+EXPECTED_TOOL_COUNT = 19
 
 # 行为属性（mcp-surface-contract「只读/破坏性/幂等」+ openWorld 协议层第四项）
 REQUIRED_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
@@ -70,6 +84,12 @@ CANONICAL_ERROR_CODES = frozenset({
     "FX_UNSOURCED",
     "PROPOSAL_STATE",
     "RECON_TASK_NOT_FOUND",
+    # 计费域（add-supply-chain-vertical 任务 1.x）
+    "RATE_UNSOURCED",
+    "RULE_CONFLICT",
+    "RULE_STATE",
+    # 信用域（add-supply-chain-vertical 任务 4.2）
+    "CREDIT_EXCEEDED",
     "INTERNAL",
 })
 # 至少四类可区分语义（error_codes.py 的 REQUIRED_CLASSES）
@@ -152,9 +172,9 @@ def check() -> tuple[list[str], dict]:
     # ---- (c) 工具数 ----
     expected = m.get("registry", {}).get("expected_tool_count")
     if expected != EXPECTED_TOOL_COUNT:
-        problems.append(f"[工具数不符] registry.expected_tool_count={expected!r} ≠ 8")
+        problems.append(f"[工具数不符] registry.expected_tool_count={expected!r} ≠ {EXPECTED_TOOL_COUNT}")
     if len(CANONICAL_TOOLS) != EXPECTED_TOOL_COUNT:
-        problems.append(f"[常量异常] CANONICAL_TOOLS 大小 {len(CANONICAL_TOOLS)} ≠ 8")
+        problems.append(f"[常量异常] CANONICAL_TOOLS 大小 {len(CANONICAL_TOOLS)} ≠ {EXPECTED_TOOL_COUNT}")
 
     # ---- (d) 每个 commercial 工具行为属性齐全 ----
     for name in sorted(commercial):
@@ -272,7 +292,7 @@ def main() -> int:
     # ---- 打印摘要 ----
     print(f"server        : {SERVER_NAME}")
     print(f"manifest      : {MANIFEST}")
-    print(f"canonical     : {len(CANONICAL_TOOLS)} 工具（controlling contract EXACT 8）")
+    print(f"canonical     : {len(CANONICAL_TOOLS)} 工具（controlling contract 8 基础 + 计费 8 + 信用 3）")
     if ctx.get("manifest"):
         m = ctx["manifest"]
         print(f"声明            : annotations={len(ctx['ann'])} / "

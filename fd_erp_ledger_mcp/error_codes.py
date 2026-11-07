@@ -68,6 +68,26 @@ CATALOG: dict[str, ErrorCode] = {
         "RECON_TASK_NOT_FOUND", "not_found", False,
         "对账任务不存在；请核对 task_id。",
     ),
+    # 计费域（add-supply-chain-vertical 任务 1.x）
+    "RATE_UNSOURCED": ErrorCode(
+        "RATE_UNSOURCED", "invalid_argument", False,
+        "计价参数缺少出处（config.rate_source 为空即拒绝）；拒绝无出处费率，"
+        "请附规则费率的来源引用（如价目表/合同编号）。",
+    ),
+    "RULE_CONFLICT": ErrorCode(
+        "RULE_CONFLICT", "invalid_argument", False,
+        "同收费维度规则冲突未处置（区间相交且无显式优先级，或生效期存在空洞）；"
+        "上线被拦截，请先处置冲突（补优先级/补齐覆盖/退役旧规则）。",
+    ),
+    "RULE_STATE": ErrorCode(
+        "RULE_STATE", "invalid_argument", False,
+        "计费规则状态不允许该操作（仅 pending_approval 可审批上线）。",
+    ),
+    # 信用域（add-supply-chain-vertical 任务 4.2）
+    "CREDIT_EXCEEDED": ErrorCode(
+        "CREDIT_EXCEEDED", "invalid_argument", False,
+        "信用额度不足；detail 含额度明细（上限/应收余额/已占用/本次请求/可用）。",
+    ),
     "INTERNAL": ErrorCode(
         "INTERNAL", "upstream", True,
         "服务内部错误，可重试；若持续请联系运维。",

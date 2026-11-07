@@ -106,5 +106,30 @@ def seed_accounts(tenant: str | None, all_tenants: bool) -> None:
     click.echo(json.dumps(result, ensure_ascii=False))
 
 
+@cli.command("set-credit-limit")
+@click.option("--tenant", default=None, show_default=False,
+              help="目标租户（缺省取 ERP_TENANT_ID）")
+@click.option("--customer", required=True, help="客户标识")
+@click.option("--limit-amount", required=True, help="额度上限（数字，原样传给 Decimal）")
+@click.option("--currency", default="CNY", show_default=True)
+@click.option("--source-ref", default=None, help="额度事实出处（额度政策/审批单号）")
+def set_credit_limit_cmd(tenant: str | None, customer: str, limit_amount: str,
+                         currency: str, source_ref: str | None) -> None:
+    """登记/调增客户信用额度上限（运维动作；额度事实带出处）。
+
+    MCP 工具面按契约固定为 reserve/release/query 三件，额度登记走本运维命令。
+    """
+    from .credit import set_credit_limit
+    settings = Settings.from_env()
+    conn = get_pool(settings).getconn()
+    try:
+        result = set_credit_limit(conn, tenant_id=tenant or settings.tenant_id,
+                                  customer_id=customer, limit_amount=limit_amount,
+                                  currency=currency, source_ref=source_ref)
+    finally:
+        get_pool(settings).putconn(conn)
+    click.echo(json.dumps(result, ensure_ascii=False))
+
+
 if __name__ == "__main__":
     cli()

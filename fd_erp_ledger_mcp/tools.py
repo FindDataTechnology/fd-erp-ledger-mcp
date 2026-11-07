@@ -1,4 +1,4 @@
-"""8 个 MCP 工具（erp-ledger-kernel 工具面 / 任务 2.1-2.4）。
+"""19 个 MCP 工具（erp-ledger-kernel 工具面 / 任务 2.1-2.4 + 计费 1.x + 信用 4.2）。
 
 写路径只出 proposal，无任何直写落账工具；确认门是唯一落账入口。
 全部工具经 safe_tool 统一错误语义 + rows_returned 计量戳。
@@ -13,6 +13,8 @@ from .annotations import annotations_for
 from .config import Settings
 from .db import connection
 from .errors import ErpError
+from . import billing as _billing
+from . import credit as _credit
 from . import ledger as _ledger
 from .proposals import (confirm_proposal as _confirm, list_proposals as _list,
                         reject_proposal as _reject, submit_proposal as _submit)
@@ -152,3 +154,182 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)
         return _get_report(settings, tenant, task_id)
+
+    # ---- 9. submit_billing_rule：登记计费规则新版本（draft → pending_approval）----
+    @mcp.tool(annotations=annotations_for("submit_billing_rule"))
+    @safe_tool
+    def submit_billing_rule(
+        config: dict[str, Any],
+        source_ref: str | None = None,
+        tenant_id: str | None = None,
+        submitted_by: str = "ops",
+    ) -> dict[str, Any]:
+        """提交计费规则新版本（收费项/计价单位/阶梯/封顶/最低消费/生效期）。
+
+        config.rate_source 必填（无出处费率拒绝）；同 rule_key 版本递增；
+        提交后为 pending_approval，须经 approve_billing_rule 人工确认才上线。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _billing.submit_billing_rule(conn, settings=settings, tenant_id=tenant,
+                                                config=config, source_ref=source_ref,
+                                                submitted_by=submitted_by)
+
+    # ---- 10. approve_billing_rule：规则确认门（pending_approval → active）----
+    @mcp.tool(annotations=annotations_for("approve_billing_rule"))
+    @safe_tool
+    def approve_billing_rule(
+        rule_id: int,
+        version: int,
+        approved_by: str = "human",
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """人工确认计费规则上线（不接受程序自审自批）。
+
+        同收费维度冲突未处置（区间相交无显式优先级 / 生效期空洞）→ 拒绝上线。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _billing.approve_billing_rule(conn, settings=settings, tenant_id=tenant,
+                                                 rule_id=rule_id, version=version,
+                                                 approved_by=approved_by)
+
+    # ---- 11. list_billing_rules ----
+    @mcp.tool(annotations=annotations_for("list_billing_rules"))
+    @safe_tool
+    def list_billing_rules(
+        status: str | None = None,
+        tenant_id: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """分页查询计费规则（draft/pending_approval/active/retired，含版本与 config）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            rows = _billing.list_billing_rules(conn, tenant, status)
+            return paginate(rows, offset=offset, limit=limit)
+
+    # ---- 12. bill_event：事件计费（幂等，写 fee_details + 机器车道 proposal）----
+    @mcp.tool(annotations=annotations_for("bill_event"))
+    @safe_tool
+    def bill_event(
+        event: dict[str, Any],
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """按 active 规则对事件计费（event 须含 stable_id/kind/occurred_at/measures/refs）。
+
+        同 stable_id 重推返回首次结果；费用行锁定规则版本+基础数据快照可重算；
+        分录走 billing-engine 机器车道 proposal（1300/4000/费用类白名单），
+        落账仍须经 confirm_proposal 确认门。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _billing.bill_event(conn, settings=settings, tenant_id=tenant, event=event)
+
+    # ---- 13. list_fees ----
+    @mcp.tool(annotations=annotations_for("list_fees"))
+    @safe_tool
+    def list_fees(
+        tenant_id: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """分页查询费用明细（append-only；红冲行为 status='reversed' + reversal_of）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            rows = _billing.list_fees(conn, tenant)
+            return paginate(rows, offset=offset, limit=limit)
+
+    # ---- 14. get_fee_detail：四层溯源 ----
+    @mcp.tool(annotations=annotations_for("get_fee_detail"))
+    @safe_tool
+    def get_fee_detail(
+        fee_id: int,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """费用详情 + 四层溯源链（费用项→业务单据→作业事件→计费规则版本）+ 快照重算。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _billing.get_fee_detail(conn, settings=settings, tenant_id=tenant,
+                                           fee_id=fee_id)
+
+    # ---- 15. reverse_fee：红冲（原行原样，反向行关联）----
+    @mcp.tool(annotations=annotations_for("reverse_fee"))
+    @safe_tool
+    def reverse_fee(
+        fee_id: int,
+        reason: str,
+        tenant_id: str | None = None,
+        reversed_by: str = "human",
+    ) -> dict[str, Any]:
+        """红冲费用：生成反向明细行（reversal_of 关联，原行保持原样，append-only）。
+
+        原费用分录已落账时同时组冲正 proposal（走既有确认车道）。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _billing.reverse_fee(conn, settings=settings, tenant_id=tenant,
+                                        fee_id=fee_id, reason=reason, reversed_by=reversed_by)
+
+    # ---- 16. simulate_billing：试算（零写入）----
+    @mcp.tool(annotations=annotations_for("simulate_billing"))
+    @safe_tool
+    def simulate_billing(
+        config: dict[str, Any],
+        events: list[dict[str, Any]],
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """按指定历史事件集试算新旧规则费用差异（零写入；费率出处纪律同正式规则）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _billing.simulate_billing(conn, settings=settings, tenant_id=tenant,
+                                             config=config, events=events)
+
+    # ---- 17. reserve_credit：占用信用额度（备忘，不写复式分录）----
+    @mcp.tool(annotations=annotations_for("reserve_credit"))
+    @safe_tool
+    def reserve_credit(
+        customer_id: str,
+        stable_id: str,
+        amount: float,
+        currency: str = "CNY",
+        source_ref: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """占用客户信用额度；额度不足拒绝（CREDIT_EXCEEDED 含额度明细）。
+
+        同 stable_id 幂等返回首次结果；占用为备忘性质，不写复式分录。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _credit.reserve_credit(conn, settings=settings, tenant_id=tenant,
+                                          customer_id=customer_id, stable_id=stable_id,
+                                          amount=amount, currency=currency,
+                                          source_ref=source_ref)
+
+    # ---- 18. release_credit ----
+    @mcp.tool(annotations=annotations_for("release_credit"))
+    @safe_tool
+    def release_credit(
+        customer_id: str,
+        stable_id: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """释放信用占用（reserved → released，幂等）；可用额度随之恢复。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _credit.release_credit(conn, settings=settings, tenant_id=tenant,
+                                          customer_id=customer_id, stable_id=stable_id)
+
+    # ---- 19. query_credit ----
+    @mcp.tool(annotations=annotations_for("query_credit"))
+    @safe_tool
+    def query_credit(
+        customer_id: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """查询客户额度位：limit / ar_balance（1300 分录重算）/ reserved / available。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _credit.credit_position(conn, settings=settings, tenant_id=tenant,
+                                           customer_id=customer_id)

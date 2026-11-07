@@ -17,7 +17,7 @@ from .config import Settings
 from .errors import ErpError
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
-REQUIRED_SCHEMA_VERSION = "0002_universal_accounts"
+REQUIRED_SCHEMA_VERSION = "0003_billing"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
