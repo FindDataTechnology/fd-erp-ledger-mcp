@@ -1,0 +1,50 @@
+name: gates
+
+# 内核的约束层不可 mock（DB 约束就是被测行为），所以 CI 起一个真 Postgres service。
+# 此前这个仓没有任何 CI：全部测试只在有人本地连库跑时才生效——而同一批用例又被
+# ERP 模板仓的 CI 如实跳过（那边不检出本仓），等于账务内核的回归两边都没覆盖。
+#
+# 本地等价跑法：
+#   createdb erp_dev && ERP_LEDGER_DATABASE_URL="postgresql:///erp_dev?host=/tmp" pytest -q
+# 2026-11-08 实测：69 passed。
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: erp_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ERP_LEDGER_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/erp_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Kernel suite（真 Postgres）
+        run: python -m pytest -q
+
+      # 工具面自检：surface 声明与实际注册必须双向一致（章程 3.7 D4），不需要库。
+      - name: Tool surface selfcheck
+        run: python scripts/selfcheck_surface.py
