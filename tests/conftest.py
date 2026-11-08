@@ -26,8 +26,16 @@ def settings():
 
 
 @pytest.fixture(autouse=True)
-def _reset_db(settings):
-    """逐用例清空业务表；journal_entries 的 TRUNCATE 需维护会话开关。"""
+def _reset_db(request):
+    """逐用例清空业务表；journal_entries 的 TRUNCATE 需维护会话开关。
+
+    带 `no_db` 标记的用例跳过本前置（harden-erp-operations 4.1）：承载探针这类
+    零依赖用例被整体 skip 掉，等于没验——2026-11-08 实测 `2 skipped` 后才加这条。
+    """
+    if request.node.get_closest_marker("no_db"):
+        yield
+        return
+    settings = request.getfixturevalue("settings")
     conn = psycopg.connect(settings.database_url, autocommit=True)
     try:
         with conn.transaction():

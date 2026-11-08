@@ -25,6 +25,9 @@ fd-erp-ledger-mcp = "fd_erp_ledger_mcp.cli:cli"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+  "no_db: 用例不依赖数据库（跳过 autouse 的 TRUNCATE 前置）",
+]
 testpaths = ["tests"]
 
 [tool.setuptools.packages.find]

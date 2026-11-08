@@ -23,4 +23,30 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     settings = settings or Settings.from_env()
     mcp: FastMCP = FastMCP(SERVER_NAME, instructions=INSTRUCTIONS)
     tools.register(mcp, settings)
+    _register_health(mcp, settings)
     return mcp
+
+
+def _register_health(mcp: FastMCP, settings: Settings) -> None:
+    """承载探针：`GET /health`（harden-erp-operations 4.1）。
+
+    为什么需要：此前的 Deployment 只有 `tcpSocket` 就绪探针、没有 liveness，而进程
+    僵死时 socket 仍在 → 探针给假绿灯、永不重启（2026-11-08 实测 `/health` `/healthz`
+    `/` 全 404，压根没有 HTTP 健康面）。
+
+    纪律：**不碰库、不碰业务数据、不回显租户与 DSN** —— 探针会被集群反复打，任何
+    数据库往返都会把健康检查变成压力源；任何身份回显都是泄漏面。
+    """
+
+    @mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
+    async def health(_request):  # noqa: ANN001 - fastmcp 传 Request
+        from starlette.responses import JSONResponse
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "service": SERVER_NAME,
+                # 只报"承载形态"，不报具体地址（地址含集群内部名）
+                "kernel_transport": "mcp",
+            }
+        )
