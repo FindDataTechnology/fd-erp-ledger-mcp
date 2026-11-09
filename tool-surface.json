@@ -288,6 +288,18 @@
         "SCHEMA_OUTDATED",
         "UPSTREAM_UNAVAILABLE"
       ]
+    },
+    "list_credit_reservations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 列出信用占用明细（含派生状态 reserved/expired/released 与 expires_at）；不释放、不修改任何占用",
+      "error_codes": [
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
     }
   },
   "tool_groups": [
@@ -341,7 +353,8 @@
       "tools": [
         "reserve_credit",
         "release_credit",
-        "query_credit"
+        "query_credit",
+        "list_credit_reservations"
       ],
       "description": "信用额度：available = limit − 1300 应收余额（分录确定性重算）− active 占用；占用为备忘性质不写复式分录；额度不足 CREDIT_EXCEEDED 带明细。"
     }
@@ -381,7 +394,7 @@
     "note": "19 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get/approve/bill/reverse/simulate/reserve/release + 名词）；无历史遗留名词序工具需兼容。"
   },
   "registry": {
-    "expected_tool_count": 19
+    "expected_tool_count": 20
   },
   "output_structure": {
     "declared": [
@@ -389,7 +402,8 @@
       "query_entries",
       "get_recon_report",
       "list_billing_rules",
-      "list_fees"
+      "list_fees",
+      "list_credit_reservations"
     ],
     "undeclared": [
       "submit_proposal",
@@ -440,6 +454,11 @@
         "next_cursor",
         "has_more",
         "rows_returned"
+      ],
+      "list_credit_reservations": [
+        "reservations[]",
+        "rows_returned",
+        "ok"
       ]
     },
     "notes": "分页用键集游标（非 OFFSET）；统一体积上限，超限返回 truncated 标记 + 原始规模 + 续读游标（mcp-result-contract）；每次响应含 rows_returned 计量戳（流式/写成功不可计行数时落 0）。其余 14 工具显式登记为 undeclared，杜绝『既未声明也未登记』的静默空缺。"

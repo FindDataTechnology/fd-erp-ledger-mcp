@@ -1,6 +1,6 @@
 """e2e 全链（6.2）：proposal → 确认 → 落账 → 余额 → 对账 → 冲正，可计数验收。
 
-同时覆盖 MCP 工具面握手（19 工具全暴露：8 基础 + 计费 8 + 信用 3）+ 工具层
+同时覆盖 MCP 工具面握手（20 工具全暴露：8 基础 + 计费 8 + 信用 4）+ 工具层
 rows_returned 落戳。
 """
 from __future__ import annotations
@@ -19,12 +19,12 @@ EXPECTED_TOOLS = {
     "query_balance", "query_entries", "run_reconciliation", "get_recon_report",
     "submit_billing_rule", "approve_billing_rule", "list_billing_rules",
     "bill_event", "list_fees", "get_fee_detail", "reverse_fee", "simulate_billing",
-    "reserve_credit", "release_credit", "query_credit",
+    "reserve_credit", "release_credit", "query_credit", "list_credit_reservations",
 }
 
 
 def test_create_server_zero_config_lists_full_tool_surface():
-    """零配置 create_server 可握手；工具面恰为契约 19 个。"""
+    """零配置 create_server 可握手；工具面恰为契约 20 个。"""
     from fd_erp_ledger_mcp.server import create_server
     server = create_server(Settings(database_url=None))
 
@@ -36,7 +36,7 @@ def test_create_server_zero_config_lists_full_tool_surface():
     import asyncio
     names = asyncio.run(go())
     assert names == EXPECTED_TOOLS
-    assert len(EXPECTED_TOOLS) == 19
+    assert len(EXPECTED_TOOLS) == 20
 
 
 def test_tool_layer_rows_returned_stamp(settings):

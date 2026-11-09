@@ -292,6 +292,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         customer_id: str,
         stable_id: str,
         amount: float,
+        expires_at: str,
         currency: str = "CNY",
         source_ref: str | None = None,
         tenant_id: str | None = None,
@@ -299,13 +300,14 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         """占用客户信用额度；额度不足拒绝（CREDIT_EXCEEDED 含额度明细）。
 
         同 stable_id 幂等返回首次结果；占用为备忘性质，不写复式分录。
+        `expires_at`（ISO 时间）必填：占用没有失效时点就无法被识别为孤儿。
         """
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)
             return _credit.reserve_credit(conn, settings=settings, tenant_id=tenant,
                                           customer_id=customer_id, stable_id=stable_id,
                                           amount=amount, currency=currency,
-                                          source_ref=source_ref)
+                                          source_ref=source_ref, expires_at=expires_at)
 
     # ---- 18. release_credit ----
     @mcp.tool(annotations=annotations_for("release_credit"))
@@ -313,13 +315,19 @@ def register(mcp: FastMCP, settings: Settings) -> None:
     def release_credit(
         customer_id: str,
         stable_id: str,
+        released_by: str = "system",
+        reason: str | None = None,
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
-        """释放信用占用（reserved → released，幂等）；可用额度随之恢复。"""
+        """释放信用占用（reserved → released，幂等）；可用额度随之恢复。
+
+        `released_by` / `reason` 落库，用于回答"谁释放的、凭什么"。
+        """
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)
             return _credit.release_credit(conn, settings=settings, tenant_id=tenant,
-                                          customer_id=customer_id, stable_id=stable_id)
+                                          customer_id=customer_id, stable_id=stable_id,
+                                          released_by=released_by, reason=reason)
 
     # ---- 19. query_credit ----
     @mcp.tool(annotations=annotations_for("query_credit"))
@@ -333,3 +341,23 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             tenant = resolve_tenant(conn, settings, tenant_id)
             return _credit.credit_position(conn, settings=settings, tenant_id=tenant,
                                            customer_id=customer_id)
+
+    # ---- 20. list_credit_reservations（只读；孤儿报表的读原语）----
+    @mcp.tool(annotations=annotations_for("list_credit_reservations"))
+    @safe_tool
+    def list_credit_reservations(
+        customer_id: str | None = None,
+        include_expired: bool = True,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """列出信用占用明细（只读，含派生状态 reserved/expired/released）。
+
+        内核不知道订单，因此本工具只给"占用是什么样"；"是否孤儿"由能同时看到
+        订单的一侧（模板层）判定。本工具不释放任何占用、不修改任何状态。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            rows = _credit.list_reservations(
+                conn, tenant_id=tenant, customer_id=customer_id,
+                include_expired=include_expired)
+            return {"ok": True, "rows_returned": len(rows), "reservations": rows}

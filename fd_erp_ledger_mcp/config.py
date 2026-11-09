@@ -24,11 +24,20 @@ class Settings:
     database_url: str | None = None
     tenant_id: str = "default"
     base_currency: str = "CNY"
+    #: 占用失效时点的上界（天）。受理方声明的 expires_at 不得超过它，否则视为
+    #: 用超长时点规避对账。由部署配置给出，不硬编码在业务层。
+    credit_reservation_max_days: int = 90
 
     @classmethod
     def from_env(cls) -> "Settings":
+        raw_max = _env("ERP_CREDIT_RESERVATION_MAX_DAYS", "90")
+        try:
+            max_days = max(1, int(raw_max or "90"))
+        except ValueError:
+            max_days = 90
         return cls(
             database_url=_env("ERP_LEDGER_DATABASE_URL"),
             tenant_id=_env("ERP_TENANT_ID", "default") or "default",
             base_currency=_env("ERP_BASE_CURRENCY", "CNY") or "CNY",
+            credit_reservation_max_days=max_days,
         )

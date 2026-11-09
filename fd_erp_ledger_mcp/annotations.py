@@ -28,6 +28,8 @@ _ANNOTATIONS: dict[str, dict[str, Any]] = {
     "reserve_credit":      {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     "release_credit":      {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     "query_credit":        {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    # 占用明细（change: close-orphan-credit-reservations）——孤儿报表的读原语
+    "list_credit_reservations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 }
 
 

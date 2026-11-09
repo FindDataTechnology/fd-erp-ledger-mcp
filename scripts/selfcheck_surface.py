@@ -40,7 +40,7 @@ SERVER_NAME = "fd-erp-ledger-mcp"
 
 # ---- canonical 真值（offline 镜像；改动请先改 /tmp/erp-kernel-contract.md）----
 
-# 19 EXACT commercial 工具名（controlling contract 8 基础 + 计费 8 + 信用 3）
+# 20 EXACT commercial 工具名（controlling contract 8 基础 + 计费 8 + 信用 4）
 CANONICAL_TOOLS = frozenset({
     "submit_proposal",
     "list_proposals",
@@ -63,8 +63,10 @@ CANONICAL_TOOLS = frozenset({
     "reserve_credit",
     "release_credit",
     "query_credit",
+    # 占用明细（close-orphan-credit-reservations）——只读，孤儿报表的读原语
+    "list_credit_reservations",
 })
-EXPECTED_TOOL_COUNT = 19
+EXPECTED_TOOL_COUNT = 20
 
 # 行为属性（mcp-surface-contract「只读/破坏性/幂等」+ openWorld 协议层第四项）
 REQUIRED_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
@@ -292,7 +294,7 @@ def main() -> int:
     # ---- 打印摘要 ----
     print(f"server        : {SERVER_NAME}")
     print(f"manifest      : {MANIFEST}")
-    print(f"canonical     : {len(CANONICAL_TOOLS)} 工具（controlling contract 8 基础 + 计费 8 + 信用 3）")
+    print(f"canonical     : {len(CANONICAL_TOOLS)} 工具（controlling contract 8 基础 + 计费 8 + 信用 4）")
     if ctx.get("manifest"):
         m = ctx["manifest"]
         print(f"声明            : annotations={len(ctx['ann'])} / "

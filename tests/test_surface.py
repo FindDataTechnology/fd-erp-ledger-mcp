@@ -1,5 +1,5 @@
-"""工具面（2.1/2.5 + add-supply-chain-vertical 1.x/4.2）：19 工具全暴露、行为属性
-齐全、错误语义对齐。"""
+"""工具面（2.1/2.5 + add-supply-chain-vertical 1.x/4.2 + close-orphan-credit-reservations）：
+20 工具全暴露、行为属性齐全、错误语义对齐。"""
 from __future__ import annotations
 
 import json
@@ -13,10 +13,10 @@ EXPECTED_TOOLS = {
     # 计费（add-supply-chain-vertical 任务 1.x）
     "submit_billing_rule", "approve_billing_rule", "list_billing_rules",
     "bill_event", "list_fees", "get_fee_detail", "reverse_fee", "simulate_billing",
-    # 信用（add-supply-chain-vertical 任务 4.2）
-    "reserve_credit", "release_credit", "query_credit",
+    # 信用（add-supply-chain-vertical 任务 4.2 + close-orphan-credit-reservations）
+    "reserve_credit", "release_credit", "query_credit", "list_credit_reservations",
 }
-EXPECTED_TOOL_COUNT = 19
+EXPECTED_TOOL_COUNT = 20
 
 
 def test_runtime_annotations_cover_exact_set():

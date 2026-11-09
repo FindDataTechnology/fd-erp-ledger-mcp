@@ -63,7 +63,7 @@ def test_schema_version_gate_fails_fast_on_missing(settings):
         with pytest.raises(ErpError) as ei:
             assert_schema_version(s)
         assert ei.value.code == "SCHEMA_OUTDATED"
-        assert ei.value.detail["required"] == "0003_billing"
+        assert ei.value.detail["required"] == "0004_credit_reservation_expiry"
     finally:
         from fd_erp_ledger_mcp.db import _pools  # 关闭临时库连接池再 DROP
         pool = _pools.pop(scratch_dsn, None)

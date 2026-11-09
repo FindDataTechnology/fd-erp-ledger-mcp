@@ -17,7 +17,11 @@ from .config import Settings
 from .errors import ErpError
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
-REQUIRED_SCHEMA_VERSION = "0003_billing"
+#: 代码要求的最低 schema 版本。加迁移必须同步提这里，否则闸门放行一个缺列的库，
+#: 故障会推迟到运行时的某次 INSERT 上（报错点离原因很远）。
+#: 0004：credit_reservations 增 expires_at / released_by / release_reason
+#: （change: close-orphan-credit-reservations）。
+REQUIRED_SCHEMA_VERSION = "0004_credit_reservation_expiry"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
