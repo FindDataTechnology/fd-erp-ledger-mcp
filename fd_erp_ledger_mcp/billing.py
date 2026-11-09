@@ -1114,6 +1114,7 @@ def _bill_period_snapshots(conn: Any, *, settings: Settings, tenant_id: str, per
     actives = fetch_all(conn, "SELECT * FROM billing_rules WHERE tenant_id=%s "
                               "AND status='active'", (tenant_id,))
     rules_amounts: list[dict[str, Any]] = []
+    unpriced: list[str] = []
     for it in items:
         candidates: list[dict[str, Any]] = []
         for r in actives:
@@ -1121,6 +1122,12 @@ def _bill_period_snapshots(conn: Any, *, settings: Settings, tenant_id: str, per
             if str(cfg.get("fee_item")) == it["fee_item"] and _window_covers(cfg, it["as_of"]):
                 candidates.append(r)
         chosen, superseded = _pick_top_by_item(candidates)
+        if not chosen:
+            # 调用方在快照里点名要对这个收费项计费，它却没有 active 规则：
+            # 必须拒绝并点名，不能交一张空账。登记表未启用（迁移过渡期）时
+            # coverage_gap 看不出这种缺失，只有这里能拦住。
+            unpriced.append(it["fee_item"])
+            continue
         for r in chosen:
             cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
             ra = _price_rule(
@@ -1142,6 +1149,17 @@ def _bill_period_snapshots(conn: Any, *, settings: Settings, tenant_id: str, per
             ra["stable_id"] = f"{event_stable}:{r['rule_key']}"
             ra["event_stable_id"] = event_stable
             rules_amounts.append(ra)
+
+    if unpriced:
+        # 先于任何写入：一条都不落，避免「部分批次」。
+        named = sorted(set(unpriced))
+        raise ErpError(
+            "FEE_COVERAGE_MISSING",
+            f"日终快照计费被拒：期间 {period} 请求计费的收费项没有 active 规则"
+            f"（{'、'.join(named)}）",
+            detail={"stage": "period_billing", "period": period,
+                    "fee_items": named, "unregistered_fee_items": []},
+        )
 
     journal_proposal_id: int | None = None
     if rules_amounts:

@@ -214,3 +214,27 @@ def test_register_fee_item_idempotent_and_retire(settings):
             register_fee_item(conn, tenant_id=TENANT, fee_item="x", event_kind="y",
                               status="bogus")
         assert ei2.value.code == "INVALID_ARGUMENT"
+
+
+def test_period_billing_refuses_when_requested_item_has_no_active_rule(settings):
+    """请求里点名要计费的收费项没有 active 规则 → 拒绝，不交空批次。
+
+    这是「登记表未启用」（租户零登记行）时的唯一防线：coverage_gap 只看得见
+    「已登记却没有规则」的项，看不见调用方临时点名、既未登记也无规则的项。
+    2026-11-10 实测：CronJob 走的 `cli bill-period` 原先会返回 fees=[] 且 exit 0，
+    把「没有规则」伪装成「当天没账」。
+    """
+    with connection(settings) as conn:
+        _approve(conn, settings, _submit(conn, settings, _rule("仓储费", "storage_day")))
+        # 未登记任何收费项 → 登记闸未启用；请求里点名一个没有规则的收费项
+        with pytest.raises(ErpError) as ei:
+            bill_period_snapshot(
+                conn, settings=settings, tenant_id=TENANT, period="2026-11-10",
+                snapshot={"fee_item": "待定价费", "as_of": "2026-11-10",
+                          "measures": {"quantity": 3}})
+        assert ei.value.code == "FEE_COVERAGE_MISSING"
+        assert ei.value.detail["stage"] == "period_billing"
+        assert ei.value.detail["fee_items"] == ["待定价费"]
+        # 零写入：没有费用、没有提案
+        assert _fee_count(settings) == 0
+        assert list_proposals(conn, TENANT) == []
