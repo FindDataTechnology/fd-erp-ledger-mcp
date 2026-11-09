@@ -24,6 +24,8 @@ _ANNOTATIONS: dict[str, dict[str, Any]] = {
     "get_fee_detail":      {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     "reverse_fee":         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     "simulate_billing":    {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    # 日终快照计费（change: optimize-erp-solution 5.3）——期间触发、幂等重跑
+    "bill_period_snapshot": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     # 信用（add-supply-chain-vertical 任务 4.2）
     "reserve_credit":      {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     "release_credit":      {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},

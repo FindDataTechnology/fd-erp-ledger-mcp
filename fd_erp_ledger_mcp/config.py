@@ -27,6 +27,10 @@ class Settings:
     #: 占用失效时点的上界（天）。受理方声明的 expires_at 不得超过它，否则视为
     #: 用超长时点规避对账。由部署配置给出，不硬编码在业务层。
     credit_reservation_max_days: int = 90
+    #: 非本位币费用折算默认取用的汇率出处（fx_facts.source）。规则 config 里可用
+    #: `fx_source` 覆盖；两边都没有出处 → 计费拒绝（FX_UNSOURCED），不猜默认汇率。
+    #: 默认 ecb-exr：fx_facts 的做种来源（`seed-fx` 的 ecb-exr 观测流）。
+    fx_source: str = "ecb-exr"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -40,4 +44,5 @@ class Settings:
             tenant_id=_env("ERP_TENANT_ID", "default") or "default",
             base_currency=_env("ERP_BASE_CURRENCY", "CNY") or "CNY",
             credit_reservation_max_days=max_days,
+            fx_source=_env("ERP_FX_SOURCE", "ecb-exr") or "ecb-exr",
         )

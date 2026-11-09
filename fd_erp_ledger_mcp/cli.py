@@ -30,8 +30,10 @@ def serve(host: str, port: int, transport: str, skip_schema_check: bool) -> None
     if not skip_schema_check and settings.database_url:
         # db-schema-lifecycle：启动前比对版本，落后即 fail-fast
         assert_schema_version(settings)
-        from .recon.engine import mark_interrupted
-        mark_interrupted(settings)
+        # optimize-erp-solution 6.5：遗留对账任务续跑或显式重排（不再静默留 interrupted）。
+        # 处置结果同时写进程内记录（/health 的 recon_startup）与结构化日志。
+        from .recon.engine import resume_orphans
+        resume_orphans(settings)
     server = create_server(settings)
     if transport == "stdio":
         server.run(transport="stdio")
@@ -126,6 +128,72 @@ def set_credit_limit_cmd(tenant: str | None, customer: str, limit_amount: str,
         result = set_credit_limit(conn, tenant_id=tenant or settings.tenant_id,
                                   customer_id=customer, limit_amount=limit_amount,
                                   currency=currency, source_ref=source_ref)
+    finally:
+        get_pool(settings).putconn(conn)
+    click.echo(json.dumps(result, ensure_ascii=False))
+
+
+@cli.command("register-fee-item")
+@click.option("--tenant", default=None, show_default=False,
+              help="目标租户（缺省取 ERP_TENANT_ID）")
+@click.option("--fee-item", required=True, help="收费项（= 规则的 config.fee_item）")
+@click.option("--event-kind", required=True, help="触发该收费项的业务事件类型")
+@click.option("--source-ref", default=None, help="登记出处（价目表/合同/审批单号）")
+@click.option("--status", default="in_use", type=click.Choice(["in_use", "retired"]),
+              show_default=True, help="in_use = 在用（进入覆盖差集）；retired = 停用")
+@click.option("--by", "registered_by", default="ops", show_default=True)
+def register_fee_item_cmd(tenant: str | None, fee_item: str, event_kind: str,
+                          source_ref: str | None, status: str, registered_by: str) -> None:
+    """登记/停用收费项（optimize-erp-solution 5.5）。
+
+    MCP 工具面口径固定（登记不是业务动作，是运维目录维护），走本命令。
+    登记在用的收费项一旦没有 active 规则，规则审批与事件/期间计费都会被拒并点名。
+    """
+    from .billing import register_fee_item
+    settings = Settings.from_env()
+    conn = get_pool(settings).getconn()
+    try:
+        result = register_fee_item(conn, tenant_id=tenant or settings.tenant_id,
+                                   fee_item=fee_item, event_kind=event_kind,
+                                   source_ref=source_ref, registered_by=registered_by,
+                                   status=status)
+    finally:
+        get_pool(settings).putconn(conn)
+    click.echo(json.dumps(result, ensure_ascii=False))
+
+
+@cli.command("bill-period")
+@click.option("--tenant", default=None, show_default=False,
+              help="目标租户（缺省取 ERP_TENANT_ID）")
+@click.option("--period", required=True,
+              help="计费期间（幂等键；日终场景 = 结算日 YYYY-MM-DD，CST 口径）")
+@click.option("--snapshot-file", required=True, type=click.Path(exists=True, dir_okay=False),
+              help='日终快照 JSON：{"snapshots":[{"fee_item","as_of","measures","refs"}]}')
+@click.option("--source-ref", default=None, help="来源引用（外部快照单号等）")
+def bill_period_cmd(tenant: str | None, period: str, snapshot_file: str,
+                    source_ref: str | None) -> None:
+    """日终快照计费（外部排程打点入口；幂等，失败非零退出）。
+
+    CronJob 契约见 README：CST 00:10 触发结算前一日；容器内须 TZ=Asia/Shanghai。
+    同 period 重跑不产生重复费用（返回 duplicate=true），所以 Job 可安全重试。
+    """
+    from .billing import bill_period_snapshots
+    settings = Settings.from_env()
+    with open(snapshot_file, encoding="utf-8") as fh:
+        body = json.load(fh)
+    snapshots = body.get("snapshots") if isinstance(body, dict) else body
+    conn = get_pool(settings).getconn()
+    try:
+        result = bill_period_snapshots(conn, settings=settings,
+                                       tenant_id=tenant or settings.tenant_id,
+                                       period=period, snapshots=snapshots,
+                                       source_ref=source_ref)
+    except Exception as exc:  # 让 CronJob 以非零退出暴露失败，而不是"跑完了但没做事"
+        code = getattr(exc, "code", None)
+        click.echo(json.dumps({"ok": False, "period": period,
+                               "error": {"code": code, "message": str(exc)}},
+                              ensure_ascii=False))
+        raise SystemExit(1) from exc
     finally:
         get_pool(settings).putconn(conn)
     click.echo(json.dumps(result, ensure_ascii=False))

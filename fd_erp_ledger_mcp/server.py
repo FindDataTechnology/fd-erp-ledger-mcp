@@ -24,6 +24,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     mcp: FastMCP = FastMCP(SERVER_NAME, instructions=INSTRUCTIONS)
     tools.register(mcp, settings)
     _register_health(mcp, settings)
+    _register_metrics(mcp)
     return mcp
 
 
@@ -36,11 +37,16 @@ def _register_health(mcp: FastMCP, settings: Settings) -> None:
 
     纪律：**不碰库、不碰业务数据、不回显租户与 DSN** —— 探针会被集群反复打，任何
     数据库往返都会把健康检查变成压力源；任何身份回显都是泄漏面。
+
+    `recon_startup`（optimize-erp-solution 6.5）：启动时对遗留对账任务的处置结果，
+    取自进程内记录（启动时写定），仍然零数据库往返；只报 task_id 与动作，不含租户。
     """
 
     @mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
     async def health(_request):  # noqa: ANN001 - fastmcp 传 Request
         from starlette.responses import JSONResponse
+
+        from .recon.engine import startup_disposition
 
         return JSONResponse(
             {
@@ -48,5 +54,23 @@ def _register_health(mcp: FastMCP, settings: Settings) -> None:
                 "service": SERVER_NAME,
                 # 只报"承载形态"，不报具体地址（地址含集群内部名）
                 "kernel_transport": "mcp",
+                "recon_startup": startup_disposition(),
             }
         )
+
+
+def _register_metrics(mcp: FastMCP) -> None:
+    """运行指标：`GET /metrics`（optimize-erp-solution 6.1）。
+
+    prometheus_client 文本暴露；纯内存、零数据库往返。暴露面纪律：只绑集群内地址、
+    不挂公网 Ingress（清单侧约束，见 README）。指标不带租户明文（租户只在日志里以
+    哈希出现）。
+    """
+
+    @mcp.custom_route("/metrics", methods=["GET"], include_in_schema=False)
+    async def metrics(_request):  # noqa: ANN001 - fastmcp 传 Request
+        from starlette.responses import Response
+
+        from .observability import metrics_content_type, render_metrics
+
+        return Response(content=render_metrics(), media_type=metrics_content_type())

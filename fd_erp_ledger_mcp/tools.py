@@ -1,4 +1,4 @@
-"""19 个 MCP 工具（erp-ledger-kernel 工具面 / 任务 2.1-2.4 + 计费 1.x + 信用 4.2）。
+"""21 个 MCP 工具（erp-ledger-kernel 工具面 / 任务 2.1-2.4 + 计费 1.x + 信用 4.2）。
 
 写路径只出 proposal，无任何直写落账工具；确认门是唯一落账入口。
 全部工具经 safe_tool 统一错误语义 + rows_returned 计量戳。
@@ -285,7 +285,30 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             return _billing.simulate_billing(conn, settings=settings, tenant_id=tenant,
                                              config=config, events=events)
 
-    # ---- 17. reserve_credit：占用信用额度（备忘，不写复式分录）----
+    # ---- 17. bill_period_snapshot：日终快照计费（期间触发，批量、幂等）----
+    @mcp.tool(annotations=annotations_for("bill_period_snapshot"))
+    @safe_tool
+    def bill_period_snapshot(
+        period: str,
+        snapshots: list[dict[str, Any]],
+        source_ref: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """日终快照计费（存储费 = 日终库存快照 × 费率），按期间触发、幂等可重跑。
+
+        snapshots 每项：{fee_item, as_of, measures, [refs]}；同 period 重跑返回首次
+        结果（duplicate=true），不产生重复费用。覆盖缺失（登记在用项无 active 规则、
+        或请求含未登记收费项）整批拒绝，不生成部分批次。费用落 fee_details + 一条
+        billing-engine 机器车道 proposal，落账仍须经 confirm_proposal 确认门。
+        外部排程（CronJob）用 `fd-erp-ledger-mcp bill-period` 打点，等价入口。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _billing.bill_period_snapshots(
+                conn, settings=settings, tenant_id=tenant, period=period,
+                snapshots=snapshots, source_ref=source_ref)
+
+    # ---- 18. reserve_credit：占用信用额度（备忘，不写复式分录）----
     @mcp.tool(annotations=annotations_for("reserve_credit"))
     @safe_tool
     def reserve_credit(
@@ -309,7 +332,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                                           amount=amount, currency=currency,
                                           source_ref=source_ref, expires_at=expires_at)
 
-    # ---- 18. release_credit ----
+    # ---- 19. release_credit ----
     @mcp.tool(annotations=annotations_for("release_credit"))
     @safe_tool
     def release_credit(
@@ -329,7 +352,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                                           customer_id=customer_id, stable_id=stable_id,
                                           released_by=released_by, reason=reason)
 
-    # ---- 19. query_credit ----
+    # ---- 20. query_credit ----
     @mcp.tool(annotations=annotations_for("query_credit"))
     @safe_tool
     def query_credit(
@@ -342,7 +365,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             return _credit.credit_position(conn, settings=settings, tenant_id=tenant,
                                            customer_id=customer_id)
 
-    # ---- 20. list_credit_reservations（只读；孤儿报表的读原语）----
+    # ---- 21. list_credit_reservations（只读；孤儿报表的读原语）----
     @mcp.tool(annotations=annotations_for("list_credit_reservations"))
     @safe_tool
     def list_credit_reservations(

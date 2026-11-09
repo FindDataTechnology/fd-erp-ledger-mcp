@@ -83,6 +83,12 @@ CATALOG: dict[str, ErrorCode] = {
         "RULE_STATE", "invalid_argument", False,
         "计费规则状态不允许该操作（仅 pending_approval 可审批上线）。",
     ),
+    "FEE_COVERAGE_MISSING": ErrorCode(
+        "FEE_COVERAGE_MISSING", "invalid_argument", False,
+        "收费项覆盖缺失：登记在用的收费项没有 active 规则（或计费命中未登记/无规则的"
+        "收费项）；detail.fee_items 点名缺失项，detail.stage 标明拦截点"
+        "（rule_approval / event_billing / period_billing）。",
+    ),
     # 信用域（add-supply-chain-vertical 任务 4.2）
     "CREDIT_EXCEEDED": ErrorCode(
         "CREDIT_EXCEEDED", "invalid_argument", False,

@@ -21,7 +21,10 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 故障会推迟到运行时的某次 INSERT 上（报错点离原因很远）。
 #: 0004：credit_reservations 增 expires_at / released_by / release_reason
 #: （change: close-orphan-credit-reservations）。
-REQUIRED_SCHEMA_VERSION = "0004_credit_reservation_expiry"
+#: 0005：fee_details 增 original_amount / base_amount / fx_rate / fx_as_of / fx_source
+#:       与收费项登记表 billing_fee_items（change: optimize-erp-solution 5.1/5.5）。
+#: 0006：recon_reports 增 request（对账任务重启续跑依据；同上 change 6.5）。
+REQUIRED_SCHEMA_VERSION = "0006_recon_task_request"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}

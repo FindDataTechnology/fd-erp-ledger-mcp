@@ -1,5 +1,5 @@
-"""工具面（2.1/2.5 + add-supply-chain-vertical 1.x/4.2 + close-orphan-credit-reservations）：
-20 工具全暴露、行为属性齐全、错误语义对齐。"""
+"""工具面（2.1/2.5 + add-supply-chain-vertical 1.x/4.2 + close-orphan-credit-reservations
++ optimize-erp-solution 5.3）：21 工具全暴露、行为属性齐全、错误语义对齐。"""
 from __future__ import annotations
 
 import json
@@ -13,10 +13,12 @@ EXPECTED_TOOLS = {
     # 计费（add-supply-chain-vertical 任务 1.x）
     "submit_billing_rule", "approve_billing_rule", "list_billing_rules",
     "bill_event", "list_fees", "get_fee_detail", "reverse_fee", "simulate_billing",
+    # 日终快照计费（optimize-erp-solution 5.3）
+    "bill_period_snapshot",
     # 信用（add-supply-chain-vertical 任务 4.2 + close-orphan-credit-reservations）
     "reserve_credit", "release_credit", "query_credit", "list_credit_reservations",
 }
-EXPECTED_TOOL_COUNT = 20
+EXPECTED_TOOL_COUNT = 21
 
 
 def test_runtime_annotations_cover_exact_set():
@@ -49,7 +51,8 @@ def test_read_only_tools_flagged():
         assert annotations_for(name)["readOnlyHint"] is True
     for name in ("submit_proposal", "confirm_proposal", "reject_proposal",
                  "run_reconciliation", "submit_billing_rule", "approve_billing_rule",
-                 "bill_event", "reverse_fee", "reserve_credit", "release_credit"):
+                 "bill_event", "bill_period_snapshot", "reverse_fee", "reserve_credit",
+                 "release_credit"):
         assert annotations_for(name)["readOnlyHint"] is False
 
 

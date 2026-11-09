@@ -246,6 +246,23 @@
         "UPSTREAM_UNAVAILABLE"
       ]
     },
+    "bill_period_snapshot": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 按期间触发日终快照计费（存储费 = 日终库存快照 × 费率）：批量快照 → fee_details（快照锁定规则版本+汇率四要素）+ 一条 billing-engine 机器车道分录 proposal（不直接落账）；幂等键 = (租户, 期间, stable_id)，同期间重跑返回首次结果",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "RATE_UNSOURCED",
+        "FX_UNSOURCED",
+        "FEE_COVERAGE_MISSING",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
     "reserve_credit": {
       "readOnlyHint": false,
       "destructiveHint": false,
@@ -343,9 +360,10 @@
         "list_fees",
         "get_fee_detail",
         "reverse_fee",
-        "simulate_billing"
+        "simulate_billing",
+        "bill_period_snapshot"
       ],
-      "description": "计费规则引擎：规则版本化 + 人工审批确认门（冲突未处置拦截上线）+ 事件/期间快照计费（stable_id 幂等、快照锁定可重算）+ 红冲留痕（原行原样）+ 四层溯源 + 无出处费率拒绝 + 试算零写入；费用落账走 billing-engine 机器车道 proposal（科目白名单），不绕过确认门。"
+      "description": "计费规则引擎：规则版本化 + 人工审批确认门（冲突未处置 / 收费项覆盖缺失拦截上线）+ 事件/期间快照计费（stable_id 幂等、快照锁定可重算、非本位币按 fx_facts 折算并保留原币+汇率四要素）+ 红冲留痕（原行原样）+ 四层溯源 + 无出处费率/汇率拒绝 + 试算零写入；费用落账走 billing-engine 机器车道 proposal（科目白名单），不绕过确认门。"
     },
     {
       "group": "credit",
@@ -383,6 +401,7 @@
       "RATE_UNSOURCED",
       "RULE_CONFLICT",
       "RULE_STATE",
+      "FEE_COVERAGE_MISSING",
       "CREDIT_EXCEEDED",
       "INTERNAL"
     ],
@@ -391,10 +410,10 @@
   "naming_convention": {
     "order": "verb_noun",
     "applies_to": "all_tools",
-    "note": "19 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get/approve/bill/reverse/simulate/reserve/release + 名词）；无历史遗留名词序工具需兼容。"
+    "note": "21 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get/approve/bill/reverse/simulate/reserve/release + 名词）；无历史遗留名词序工具需兼容。"
   },
   "registry": {
-    "expected_tool_count": 20
+    "expected_tool_count": 21
   },
   "output_structure": {
     "declared": [
@@ -419,7 +438,8 @@
       "simulate_billing",
       "reserve_credit",
       "release_credit",
-      "query_credit"
+      "query_credit",
+      "bill_period_snapshot"
     ],
     "tool_fields": {
       "list_proposals": [
@@ -461,11 +481,11 @@
         "ok"
       ]
     },
-    "notes": "分页用键集游标（非 OFFSET）；统一体积上限，超限返回 truncated 标记 + 原始规模 + 续读游标（mcp-result-contract）；每次响应含 rows_returned 计量戳（流式/写成功不可计行数时落 0）。其余 14 工具显式登记为 undeclared，杜绝『既未声明也未登记』的静默空缺。"
+    "notes": "分页用键集游标（非 OFFSET）；统一体积上限，超限返回 truncated 标记 + 原始规模 + 续读游标（mcp-result-contract）；每次响应含 rows_returned 计量戳（流式/写成功不可计行数时落 0）。其余 15 工具显式登记为 undeclared，杜绝『既未声明也未登记』的静默空缺。"
   },
   "notes": {
     "compliance_boundary": "二清红线：资金归集/代收代付/分账平台只做对账与核对指令层，资金走客户自选持牌通道；开票/税务申报不自研（挂账），账内可记录发票类事件参与对账、票据本体由客户既有合规渠道处理。信用占用为备忘性质，不执行资金放款/扣款。",
     "honest_caliber": "本 manifest 与 deploy 清单均为 publish-ready 工件：网关路由未上线、registry 快照未 live 写入、谦面市场未上架、镜像未构建。Live publish / gateway rollout / registry push / 官网 deploy 均属 DEPLOY 步骤（需 live 凭据），本 apply 挂账。",
-    "no_internal_group": "19 工具全部 commercial，无 internal 组；消费侧暴露集 ⊆ commercial 集闭合。"
+    "no_internal_group": "21 工具全部 commercial，无 internal 组；消费侧暴露集 ⊆ commercial 集闭合。"
   }
 }

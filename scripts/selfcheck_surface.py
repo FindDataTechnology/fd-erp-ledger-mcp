@@ -6,22 +6,23 @@
 
 双向断言（对应 spec「selfcheck 双向断言」）：
   方向 1 · 一致（manifest ↔ 运行时注册真值）：
-      manifest 的 tool_annotations / tool_groups 工具集，必须与 canonical 19 工具集
-      （hardcode：8 基础账本 + 计费 8 + 信用 3，add-supply-chain-vertical 任务 1.x/4.2）
+      manifest 的 tool_annotations / tool_groups 工具集，必须与 canonical 21 工具集
+      （hardcode：8 基础账本 + 计费 9 + 信用 4，add-supply-chain-vertical 任务 1.x/4.2
+      + optimize-erp-solution 5.3 的 bill_period_snapshot）
       逐名相等。
       由于离线不加载运行时，canonical 集合即运行时注册真值的离线镜像；
       新增/删除工具而 manifest 未同步 → 失败并点名差异。
   方向 2 · 闭合（对外暴露集 ⊆ commercial 集）：
       消费侧/网关欲暴露的工具集必须落在 manifest 的 commercial 集内。
-      默认暴露集 = canonical 19；可用 --expose 传入逗号分隔工具名模拟某个 pack
+      默认暴露集 = canonical 21；可用 --expose 传入逗号分隔工具名模拟某个 pack
       的声明，越界（点名 internal/不存在工具）即失败。
 
 另有静态完整性断言（闭环，不依赖运行时）：
-  - registry.expected_tool_count == 19
+  - registry.expected_tool_count == 21
   - 每个 commercial 工具声明齐全的行为属性（只读/破坏性/幂等/openWorld 四 hint）
   - 封闭错误码集合非空、语义类 ≥4 类可区分、且与运行时 CATALOG 镜像一致；
     每个工具自报的 error_codes ⊆ 该封闭集合（不允许临时造码）
-  - output_structure 的 declared ∪ undeclared == 全 19 工具且互斥（无静默空缺），
+  - output_structure 的 declared ∪ undeclared == 全 21 工具且互斥（无静默空缺），
     每个 declared 工具都有 tool_fields
 
 退出码：0 = PASS / 1 = FAIL（逐条列出差异）。
@@ -40,7 +41,7 @@ SERVER_NAME = "fd-erp-ledger-mcp"
 
 # ---- canonical 真值（offline 镜像；改动请先改 /tmp/erp-kernel-contract.md）----
 
-# 20 EXACT commercial 工具名（controlling contract 8 基础 + 计费 8 + 信用 4）
+# 21 EXACT commercial 工具名（controlling contract 8 基础 + 计费 9 + 信用 4）
 CANONICAL_TOOLS = frozenset({
     "submit_proposal",
     "list_proposals",
@@ -59,6 +60,8 @@ CANONICAL_TOOLS = frozenset({
     "get_fee_detail",
     "reverse_fee",
     "simulate_billing",
+    # 日终快照计费（optimize-erp-solution 5.3）——期间触发、幂等重跑
+    "bill_period_snapshot",
     # 信用（add-supply-chain-vertical 任务 4.2）
     "reserve_credit",
     "release_credit",
@@ -66,7 +69,7 @@ CANONICAL_TOOLS = frozenset({
     # 占用明细（close-orphan-credit-reservations）——只读，孤儿报表的读原语
     "list_credit_reservations",
 })
-EXPECTED_TOOL_COUNT = 20
+EXPECTED_TOOL_COUNT = 21
 
 # 行为属性（mcp-surface-contract「只读/破坏性/幂等」+ openWorld 协议层第四项）
 REQUIRED_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
@@ -90,6 +93,8 @@ CANONICAL_ERROR_CODES = frozenset({
     "RATE_UNSOURCED",
     "RULE_CONFLICT",
     "RULE_STATE",
+    # 收费项覆盖缺失（optimize-erp-solution 5.5）
+    "FEE_COVERAGE_MISSING",
     # 信用域（add-supply-chain-vertical 任务 4.2）
     "CREDIT_EXCEEDED",
     "INTERNAL",
@@ -278,7 +283,7 @@ def main() -> int:
     ap.add_argument(
         "--expose",
         default="",
-        help="逗号分隔的工具名，模拟某 pack/消费侧声明的暴露集（默认=canonical 8）。用于验证闭合方向。",
+        help="逗号分隔的工具名，模拟某 pack/消费侧声明的暴露集（默认=canonical 21）。用于验证闭合方向。",
     )
     args = ap.parse_args()
 
@@ -294,7 +299,7 @@ def main() -> int:
     # ---- 打印摘要 ----
     print(f"server        : {SERVER_NAME}")
     print(f"manifest      : {MANIFEST}")
-    print(f"canonical     : {len(CANONICAL_TOOLS)} 工具（controlling contract 8 基础 + 计费 8 + 信用 4）")
+    print(f"canonical     : {len(CANONICAL_TOOLS)} 工具（controlling contract 8 基础 + 计费 9 + 信用 4）")
     if ctx.get("manifest"):
         m = ctx["manifest"]
         print(f"声明            : annotations={len(ctx['ann'])} / "

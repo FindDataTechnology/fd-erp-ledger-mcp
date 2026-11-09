@@ -19,12 +19,20 @@
   （submitted_by="billing-engine"，科目白名单闸在 proposals 层强制：限 1300/4000/
   费用类 5100/5200，禁 1000/2100/3000/3100）；计费引擎绝不直写 journal_entries，
   落账仍只能经 confirm_proposal 确认门。
-- 日终快照计费：bill_period_snapshot（存储费按日终库存快照 × 费率），同样产出
-  fee_details 行 + proposal，幂等键 = bill-period:<period>:<rule_key>。
+- 多币种折算（design D7）：组分录时按 fx_facts 的登记事实折算，费用明细同时落
+  原币金额 / 本位币金额 / 汇率 / 时点 / 出处；无出处或与登记不符 → FX_UNSOURCED
+  且零分录、零费用行（汇率在任何写入前解析）。MUST NOT 再静默跳过非本位币费用。
+- 覆盖缺失阻断（design D9）：收费项登记（billing_fee_items）的「在用集合」减去
+  「active 规则集合」非空 → 审批上线与事件/期间计费一律拒绝并点名
+  （FEE_COVERAGE_MISSING）；不以日志告警后放行。
+- 日终快照计费：bill_period_snapshots（存储费按日终库存快照 × 费率；单期间批量、
+  幂等键 = bill-period:<period>，覆写 fee_details 的 (tenant, stable_id) 唯一键），
+  同样产出 fee_details 行 + 一条机器车道 proposal。
 """
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
@@ -32,8 +40,10 @@ from typing import Any
 from .config import Settings
 from .db import fetch_all, fetch_one
 from .errors import ErpError
+from .fx import resolve_rate
 from .proposals import submit_proposal
 from .tenancy import audit
+from . import observability as obs
 
 Q6 = Decimal("0.000001")
 _MODES = ("unit", "percent", "tiered")
@@ -238,6 +248,19 @@ def validate_config(config: Any, *, settings: Settings) -> dict[str, Any]:
     if cfg.get("priority") is not None:
         _dec(cfg["priority"], what="priority")
     cfg["currency"] = str(cfg.get("currency") or settings.base_currency).strip()
+    # 非本位币计价可以在规则里指定汇率出处（fx_facts.source）；显式给了空白 → 视为
+    # 「无出处」拒绝，而不是悄悄回落到默认源（出处纪律同 config.rate_source）。
+    if "fx_source" in cfg and cfg["fx_source"] is not None:
+        fx_source = str(cfg["fx_source"]).strip()
+        if not fx_source:
+            raise ErpError(
+                "FX_UNSOURCED",
+                "规则 config.fx_source 为空；拒绝无出处汇率（删除该字段以使用默认汇率源）",
+                detail={"missing_field": "fx_source",
+                        "currency": cfg["currency"],
+                        "default_source": settings.fx_source},
+            )
+        cfg["fx_source"] = fx_source
     return cfg
 
 
@@ -422,6 +445,23 @@ def approve_billing_rule(conn: Any, *, settings: Settings, tenant_id: str,
         raise ErpError("RULE_CONFLICT", "规则冲突未处置，上线被拦截",
                        detail={"rule_id": rule_id, "version": version, "conflicts": conflicts})
 
+    # 覆盖缺失差集（design D9）：按 post-state 判定——候选版本上线、同 rule_key 旧版本
+    # 随 approval 退役。任一登记在用的收费项在 post-state 仍无 active 规则 → 拒绝，
+    # 不拿日志/告警放行。未启用登记（零登记行）的租户不受此闸影响（迁移过渡口径）。
+    cfg_row = row["config"] if isinstance(row["config"], dict) else json.loads(row["config"])
+    missing_items = coverage_gap(
+        conn, tenant_id,
+        drop_rule_keys=frozenset({str(row["rule_key"])}),
+        add_fee_item=str(cfg_row.get("fee_item") or ""),
+    )
+    if missing_items:
+        raise ErpError(
+            "FEE_COVERAGE_MISSING",
+            f"收费项覆盖缺失，上线被拦截：{', '.join(missing_items)} 当前无 active 规则",
+            detail={"stage": "rule_approval", "rule_id": rule_id, "version": version,
+                    "fee_items": missing_items},
+        )
+
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -501,6 +541,157 @@ def _match_event_rules(active_rules: list[dict[str, Any]], *, kind: str,
 
 
 # ---------------------------------------------------------------------------
+# 收费项登记 + 覆盖缺失差集（design D9）
+#
+# 口径：「登记在用集合 − active 规则集合」非空即阻断，三个拦截点共用同一组差集：
+#   rule_approval  — 审批上线时（post-state：候选版本上线、同 rule_key 旧版本退役）
+#   event_billing  — 事件计费时（该事件类型本应命中的在用收费项都须有覆盖该日的规则，
+#                    且计费命中的收费项必须已登记）
+#   period_billing — 日终快照计费时（整期间判定，不生成部分批次）
+# 迁移过渡：租户一条登记都没有 → 视为「尚未启用登记」，不做覆盖阻断（登记是显式
+# 运维动作，register-fee-item）。一旦有登记，差集判定对全部拦截点生效，不放行。
+# ---------------------------------------------------------------------------
+
+def register_fee_item(conn: Any, *, tenant_id: str, fee_item: str, event_kind: str,
+                      source_ref: str | None = None, registered_by: str = "ops",
+                      status: str = "in_use") -> dict[str, Any]:
+    """登记/改登记一个收费项（运维动作；MCP 工具面不扩这一件）。
+
+    status='in_use' 表示在用（进入覆盖差集）；'retired' 表示停用（退出差集）。
+    幂等：同 (tenant, fee_item, event_kind) 重复登记只更新状态与出处。
+    """
+    fee_item = str(fee_item or "").strip()
+    event_kind = str(event_kind or "").strip()
+    if not fee_item:
+        raise ErpError("INVALID_ARGUMENT", "fee_item 不能为空")
+    if not event_kind:
+        raise ErpError("INVALID_ARGUMENT", "event_kind 不能为空（收费项由哪种事件触发）")
+    status = str(status or "in_use").strip()
+    if status not in ("in_use", "retired"):
+        raise ErpError("INVALID_ARGUMENT", "status 须为 in_use/retired",
+                       detail={"status": status})
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO billing_fee_items(tenant_id, fee_item, event_kind, status, "
+                "source_ref, registered_by, retired_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s, CASE WHEN %s='retired' THEN now() END) "
+                "ON CONFLICT (tenant_id, fee_item, event_kind) DO UPDATE SET "
+                "status=excluded.status, source_ref=excluded.source_ref, "
+                "registered_by=excluded.registered_by, retired_at=excluded.retired_at",
+                (tenant_id, fee_item, event_kind, status, source_ref, registered_by, status),
+            )
+    audit(conn, tenant_id, "fee_item_registered", actor=registered_by, target=fee_item,
+          detail={"event_kind": event_kind, "status": status, "source_ref": source_ref})
+    return {"fee_item": fee_item, "event_kind": event_kind, "status": status}
+
+
+def list_fee_items(conn: Any, tenant_id: str, status: str | None = None) -> list[dict[str, Any]]:
+    sql = ("SELECT fee_item, event_kind, status, source_ref, registered_by, "
+           "created_at, retired_at FROM billing_fee_items WHERE tenant_id=%s ")
+    params: list[Any] = [tenant_id]
+    if status:
+        sql += "AND status=%s "
+        params.append(status)
+    sql += "ORDER BY fee_item, event_kind"
+    rows = fetch_all(conn, sql, tuple(params))
+    for r in rows:
+        for k in ("created_at", "retired_at"):
+            if r.get(k) is not None:
+                r[k] = str(r[k])
+    return rows
+
+
+def _registry_adopted(conn: Any, tenant_id: str) -> bool:
+    """该租户是否已启用收费项登记（有任意一行，含 retired）。"""
+    return fetch_one(conn, "SELECT 1 AS x FROM billing_fee_items WHERE tenant_id=%s LIMIT 1",
+                     (tenant_id,)) is not None
+
+
+def _in_use_fee_items(conn: Any, tenant_id: str) -> list[dict[str, Any]]:
+    return fetch_all(
+        conn,
+        "SELECT fee_item, event_kind FROM billing_fee_items "
+        "WHERE tenant_id=%s AND status='in_use'",
+        (tenant_id,),
+    )
+
+
+def _covered_fee_items(conn: Any, tenant_id: str, *,
+                       drop_rule_keys: frozenset[str] = frozenset(),
+                       add_fee_item: str | None = None) -> set[str]:
+    """active 规则覆盖到的收费项集合（可模拟 post-state：退役某些 rule_key + 新增候选）。"""
+    actives = fetch_all(conn, "SELECT rule_key, config FROM billing_rules "
+                              "WHERE tenant_id=%s AND status='active'", (tenant_id,))
+    covered: set[str] = set()
+    for r in actives:
+        if r["rule_key"] in drop_rule_keys:
+            continue
+        cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
+        item = str(cfg.get("fee_item") or "").strip()
+        if item:
+            covered.add(item)
+    if add_fee_item:
+        covered.add(add_fee_item)
+    return covered
+
+
+def coverage_gap(conn: Any, tenant_id: str, *,
+                 drop_rule_keys: frozenset[str] = frozenset(),
+                 add_fee_item: str | None = None) -> list[str]:
+    """「登记在用集合 − active 规则集合」；空列表 = 无缺失（或尚未启用登记）。
+
+    已在审批管道里的收费项（存在 pending_approval 规则）不计入缺口：它本身就是待上线
+    的候选，把它当缺口会让「两个收费项依次上线」永久死锁——批准 A 时 B 未上线，
+    批准 B 时 A 又成缺口。真正要拦的是「停旧未上新」：该收费项没有任何 pending 候选，
+    仍会被点名。
+    """
+    if not _registry_adopted(conn, tenant_id):
+        return []
+    in_use = {str(r["fee_item"]) for r in _in_use_fee_items(conn, tenant_id)}
+    pipeline = _pending_fee_items(conn, tenant_id)
+    covered = _covered_fee_items(conn, tenant_id, drop_rule_keys=drop_rule_keys,
+                                 add_fee_item=add_fee_item)
+    return sorted((in_use - pipeline) - covered)
+
+
+def _pending_fee_items(conn: Any, tenant_id: str) -> set[str]:
+    """审批管道中的收费项（有 pending_approval 规则）。"""
+    rows = fetch_all(
+        conn,
+        "SELECT config FROM billing_rules WHERE tenant_id=%s AND status='pending_approval'",
+        (tenant_id,),
+    )
+    out: set[str] = set()
+    for r in rows:
+        cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
+        item = str(cfg.get("fee_item") or "").strip()
+        if item:
+            out.add(item)
+    return out
+
+
+def _event_coverage_gap(conn: Any, tenant_id: str, *, kind: str, occurred: date,
+                        matched_fee_items: set[str]) -> tuple[list[str], list[str]]:
+    """事件计费覆盖判定：返回 (本应命中却无 active 规则的项, 命中但未登记的项)。"""
+    if not _registry_adopted(conn, tenant_id):
+        return [], []
+    in_use = _in_use_fee_items(conn, tenant_id)
+    registered = {str(r["fee_item"]) for r in in_use}
+    expected = {str(r["fee_item"]) for r in in_use if str(r["event_kind"]) == kind}
+    actives = fetch_all(conn, "SELECT config FROM billing_rules WHERE tenant_id=%s "
+                              "AND status='active'", (tenant_id,))
+    covered: set[str] = set()
+    for r in actives:
+        cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
+        if str(cfg.get("event_kind")) == kind and _window_covers(cfg, occurred):
+            covered.add(str(cfg.get("fee_item") or ""))
+    missing_rule = sorted(expected - covered)
+    unregistered = sorted(matched_fee_items - registered)
+    return missing_rule, unregistered
+
+
+# ---------------------------------------------------------------------------
 # 事件计费 + 日终快照计费
 # ---------------------------------------------------------------------------
 
@@ -524,8 +715,18 @@ def _validate_event(event: Any) -> tuple[str, str, date, dict[str, Any], dict[st
 
 
 def _fee_view(row: dict[str, Any], journal_proposal_id: Any = None) -> dict[str, Any]:
+    """费用明细视图：原币 / 本位币 / 汇率四要素一并返回（design D7 可独立审计）。
+
+    `amount` 保留为兼容列（= 计价币种金额 = original_amount）；`original_amount` /
+    `base_amount` / `fx_*` 对 0005 之前的存量行为 None（不补造折算口径）。
+    """
     prov = row["provenance"] if isinstance(row["provenance"], dict) else {}
     jp = prov.get("journal") or {}
+
+    def _s(key: str) -> str | None:
+        value = row.get(key)
+        return None if value is None else str(value)
+
     return {
         "fee_id": row["id"],
         "stable_id": row["stable_id"],
@@ -533,6 +734,11 @@ def _fee_view(row: dict[str, Any], journal_proposal_id: Any = None) -> dict[str,
         "fee_item": row["fee_item"],
         "amount": str(row["amount"]),
         "currency": row["currency"],
+        "original_amount": _s("original_amount"),
+        "base_amount": _s("base_amount"),
+        "fx_rate": _s("fx_rate"),
+        "fx_as_of": _s("fx_as_of"),
+        "fx_source": row.get("fx_source"),
         "rule_id": row["rule_id"],
         "rule_version": row["rule_version"],
         "status": row["status"],
@@ -543,48 +749,142 @@ def _fee_view(row: dict[str, Any], journal_proposal_id: Any = None) -> dict[str,
     }
 
 
+def _resolve_fee_fx(conn: Any, *, settings: Settings, cfg: dict[str, Any],
+                    amount: Decimal, priced_on: date) -> dict[str, Any]:
+    """按 fx_facts 的登记事实折算一笔费用；返回折算四要素 + 本位币金额。
+
+    **调用方必须在任何写入之前先解析全部费用**：缺出处 / 无登记事实 → FX_UNSOURCED，
+    fee_details 零行、journal_entries 零分录（不留半批）。
+
+    - 出处取 `config.fx_source`，缺省回落 `Settings.fx_source`（ERP_FX_SOURCE）；
+      两边都没有 → 拒绝（不猜默认汇率）。
+    - 「与登记不符」的第二道闸在账本层：折算出的 rate/as_of/source 进入分录行后，
+      `ledger._normalize_lines` 会重新按 fx_facts 核对，不一致同样 FX_UNSOURCED。
+    """
+    currency = _fee_currency(cfg, settings=settings)
+    if currency == settings.base_currency:
+        base = amount.quantize(Q6, rounding=ROUND_HALF_UP)
+        return {"currency": currency, "original_amount": amount, "base_amount": base,
+                "fx_rate": None, "fx_as_of": None, "fx_source": None}
+    source = str(cfg.get("fx_source") or settings.fx_source or "").strip()
+    as_of = str(priced_on)
+    if not source:
+        raise ErpError(
+            "FX_UNSOURCED",
+            f"非本位币费用 {currency} 无汇率出处（规则未指定 fx_source，且未配置默认汇率源）",
+            detail={"currency": currency, "as_of": as_of, "source": None,
+                    "fee_item": cfg.get("fee_item"), "reason": "no_source"},
+        )
+    rate = resolve_rate(conn, currency, as_of, source, settings=settings)
+    if rate is None:
+        raise ErpError(
+            "FX_UNSOURCED",
+            f"非本位币费用 {currency} 在 {as_of} 没有登记汇率（source={source}）；拒绝入账",
+            detail={"currency": currency, "as_of": as_of, "source": source,
+                    "fee_item": cfg.get("fee_item"), "reason": "no_registered_rate"},
+        )
+    base = (amount * rate).quantize(Q6, rounding=ROUND_HALF_UP)
+    return {"currency": currency, "original_amount": amount, "base_amount": base,
+            "fx_rate": rate, "fx_as_of": as_of, "fx_source": source}
+
+
+def _price_rule(conn: Any, *, settings: Settings, rule: dict[str, Any],
+                measures: dict[str, Any], priced_on: date,
+                snapshot: dict[str, Any], provenance: dict[str, Any]) -> dict[str, Any]:
+    """计价 + 折算（任何一步失败都在写入之前抛出；事件与期间快照共用）。"""
+    cfg = rule["config"] if isinstance(rule["config"], dict) else json.loads(rule["config"])
+    amount, breakdown = compute_fee_with_breakdown(cfg, measures)
+    fx = _resolve_fee_fx(conn, settings=settings, cfg=cfg, amount=amount, priced_on=priced_on)
+    snap = dict(snapshot)
+    snap.update({
+        "rule_config": cfg,
+        "breakdown": breakdown,
+        "fx": {
+            "original_amount": str(fx["original_amount"]),
+            "base_amount": str(fx["base_amount"]),
+            "rate": None if fx["fx_rate"] is None else str(fx["fx_rate"]),
+            "as_of": fx["fx_as_of"],
+            "source": fx["fx_source"],
+        },
+    })
+    return {
+        "rule_id": int(rule["id"]),
+        "rule_version": int(rule["version"]),
+        "fee_item": str(cfg["fee_item"]),
+        "amount": amount,
+        "original_amount": fx["original_amount"],
+        "base_amount": fx["base_amount"],
+        "currency": fx["currency"],
+        "fx_rate": None if fx["fx_rate"] is None else str(fx["fx_rate"]),
+        "fx_as_of": fx["fx_as_of"],
+        "fx_source": fx["fx_source"],
+        "fee_type": str(cfg.get("fee_type") or "revenue"),
+        "snapshot": snap,
+        "provenance": provenance,
+    }
+
+
+def _record_billed(path: str, tenant_id: str, rules_amounts: list[dict[str, Any]]) -> None:
+    """计费笔数按币种落指标（币种是账务口径，不是客户标识）。"""
+    per_currency: dict[str, int] = defaultdict(int)
+    for ra in rules_amounts:
+        per_currency[str(ra["currency"])] += 1
+    for currency, count in per_currency.items():
+        obs.fees_billed(path, currency=currency, count=count, tenant_id=tenant_id)
+
+
+def _fee_fx_key(fee: dict[str, Any]) -> tuple[str, str, str, str]:
+    """分录分组键：同币种同汇率事实的费用才可汇总成一行。"""
+    return (str(fee["currency"]),
+            "" if fee.get("fx_rate") is None else str(fee["fx_rate"]),
+            "" if fee.get("fx_as_of") is None else str(fee["fx_as_of"]),
+            "" if fee.get("fx_source") is None else str(fee["fx_source"]))
+
+
 def _compose_and_submit_journal(
     conn: Any, *, settings: Settings, tenant_id: str, fees: list[dict[str, Any]],
     journal_stable: str, source_ref: str | None,
 ) -> tuple[int | None, str | None]:
     """把费用组成机器车道分录 proposal（借 1300 / 贷 4000；费用类借 5100 / 贷 1300）。
 
-    非本位币费用不进分录（如实守界：机器车道不做无出处折算），行内注明。
+    按 (currency, fx_rate, fx_as_of, fx_source) 分组：非本位币费用不折成一笔「本位币
+    汇总」，而是按原币金额 + 汇率四要素成行，让分录自己解释金额（design D7）。
+    同组借贷两侧同额 → 折算后的 amount_base 相等，借贷必平仍由 DB 延迟约束在 COMMIT
+    判定。汇率已在调用方预解析，本函数 **不做任何静默跳过**。
     返回 (proposal_id, note)。
     """
-    rev_total = Decimal(0)
-    exp_total = Decimal(0)
-    skipped: list[dict[str, str]] = []
+    groups: dict[tuple[str, str, str, str], dict[str, Decimal]] = defaultdict(
+        lambda: {"revenue": Decimal(0), "expense": Decimal(0)})
     for f in fees:
-        if f["currency"] != settings.base_currency:
-            skipped.append({"fee_item": f["fee_item"], "currency": f["currency"]})
-            continue
-        if f["fee_type"] == "revenue":
-            rev_total += f["amount"]
-        else:
-            exp_total += f["amount"]
+        bucket = "revenue" if f["fee_type"] == "revenue" else "expense"
+        groups[_fee_fx_key(f)][bucket] += Decimal(str(f["amount"]))
+
     lines: list[dict[str, Any]] = []
-    if rev_total > 0:
-        lines.append({"account_code": "1300", "direction": "debit",
-                      "amount": str(rev_total.quantize(Q6)), "currency": settings.base_currency})
-        lines.append({"account_code": "4000", "direction": "credit",
-                      "amount": str(rev_total.quantize(Q6)), "currency": settings.base_currency})
-    if exp_total > 0:
-        lines.append({"account_code": "5100", "direction": "debit",
-                      "amount": str(exp_total.quantize(Q6)), "currency": settings.base_currency})
-        lines.append({"account_code": "1300", "direction": "credit",
-                      "amount": str(exp_total.quantize(Q6)), "currency": settings.base_currency})
+    for key in sorted(groups):
+        currency, rate, as_of, source = key
+        rev = groups[key]["revenue"]
+        exp = groups[key]["expense"]
+        common: dict[str, Any] = {"currency": currency}
+        if currency != settings.base_currency:
+            common.update({"fx_rate": rate, "fx_as_of": as_of, "fx_source": source})
+        if rev > 0:
+            lines.append({"account_code": "1300", "direction": "debit",
+                          "amount": str(rev.quantize(Q6)), **common})
+            lines.append({"account_code": "4000", "direction": "credit",
+                          "amount": str(rev.quantize(Q6)), **common})
+        if exp > 0:
+            lines.append({"account_code": "5100", "direction": "debit",
+                          "amount": str(exp.quantize(Q6)), **common})
+            lines.append({"account_code": "1300", "direction": "credit",
+                          "amount": str(exp.quantize(Q6)), **common})
     if not lines:
-        return None, "无非本位币可折费用或金额为零，未生成分录 proposal" if skipped else None
+        return None, "费用金额为零，未生成分录 proposal"
     prop = submit_proposal(
         conn, settings=settings, tenant_id=tenant_id, stable_id=journal_stable,
         lines=lines, source_ref=source_ref, kind="journal",
         submitted_by="billing-engine",
     )
-    note = None
-    if skipped:
-        note = "非本位币费用未进分录（机器车道不做无出处折算）"
-    return prop["proposal_id"], note
+    return prop["proposal_id"], None
 
 
 def _insert_fee_rows(conn: Any, *, tenant_id: str, rules_amounts: list[dict[str, Any]],
@@ -596,13 +896,16 @@ def _insert_fee_rows(conn: Any, *, tenant_id: str, rules_amounts: list[dict[str,
                 prov.update(provenance_extra)
                 cur.execute(
                     "INSERT INTO fee_details(tenant_id, rule_id, rule_version, stable_id, "
-                    "event_stable_id, fee_item, snapshot, amount, currency, provenance, status) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s::jsonb,'normal') "
+                    "event_stable_id, fee_item, snapshot, amount, original_amount, base_amount, "
+                    "currency, fx_rate, fx_as_of, fx_source, provenance, status) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,'normal') "
                     "ON CONFLICT (tenant_id, stable_id) DO NOTHING",
                     (tenant_id, ra["rule_id"], ra["rule_version"], ra["stable_id"],
                      ra["event_stable_id"], ra["fee_item"],
                      json.dumps(ra["snapshot"], ensure_ascii=False), str(ra["amount"]),
-                     ra["currency"], json.dumps(prov, ensure_ascii=False)),
+                     str(ra["original_amount"]), str(ra["base_amount"]),
+                     ra["currency"], ra["fx_rate"], ra["fx_as_of"], ra["fx_source"],
+                     json.dumps(prov, ensure_ascii=False)),
                 )
 
 
@@ -612,7 +915,25 @@ def bill_event(conn: Any, *, settings: Settings, tenant_id: str, event: dict[str
 
     幂等：同 event.stable_id 重推返回首次结果（UNIQUE(tenant_id, stable_id) 兜底）。
     计费快照锁定规则版本 + 基础数据，可重算一致（get_fee_detail.snapshot_replay）。
+    覆盖缺失（登记在用项无 active 规则 / 命中未登记项）在写入前阻断并点名收费项。
+    失败按封闭错误码归因落指标（erp_billing_failures_total{reason}）。
     """
+    try:
+        return _bill_event(conn, settings=settings, tenant_id=tenant_id, event=event,
+                           source_ref=source_ref)
+    except ErpError as exc:
+        obs.billing_failed(exc.code, path="event", tenant_id=tenant_id,
+                           detail={"stage": exc.detail.get("stage"),
+                                   "fee_items": exc.detail.get("fee_items"),
+                                   "unregistered_fee_items":
+                                       exc.detail.get("unregistered_fee_items"),
+                                   "currency": exc.detail.get("currency"),
+                                   "as_of": exc.detail.get("as_of")})
+        raise
+
+
+def _bill_event(conn: Any, *, settings: Settings, tenant_id: str, event: dict[str, Any],
+                source_ref: str | None) -> dict[str, Any]:
     stable, kind, occurred, measures, refs = _validate_event(event)
     existing = fetch_all(
         conn, "SELECT * FROM fee_details WHERE tenant_id=%s AND event_stable_id=%s ORDER BY id",
@@ -625,22 +946,31 @@ def bill_event(conn: Any, *, settings: Settings, tenant_id: str, event: dict[str
     actives = fetch_all(conn, "SELECT * FROM billing_rules WHERE tenant_id=%s "
                               "AND status='active'", (tenant_id,))
     matched = _match_event_rules(actives, kind=kind, occurred=occurred)
+
+    # 覆盖缺失阻断（design D9）：先于任何写入判定，不生成部分费用明细。
+    matched_items = {str(cfg.get("fee_item") or "") for cfg in
+                     (r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
+                      for r in matched)}
+    missing_rule, unregistered = _event_coverage_gap(
+        conn, tenant_id, kind=kind, occurred=occurred, matched_fee_items=matched_items)
+    if missing_rule or unregistered:
+        named = sorted(set(missing_rule) | set(unregistered))
+        raise ErpError(
+            "FEE_COVERAGE_MISSING",
+            f"事件计费被拒：收费项覆盖缺失（{'、'.join(named)}）",
+            detail={"stage": "event_billing", "event_kind": kind, "as_of": str(occurred),
+                    "fee_items": missing_rule, "unregistered_fee_items": unregistered},
+        )
+
     chosen, superseded = _pick_top_by_item(matched)
 
     rules_amounts: list[dict[str, Any]] = []
     for r in chosen:
         cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
-        amount, breakdown = compute_fee_with_breakdown(cfg, measures)
-        rules_amounts.append({
-            "rule_id": int(r["id"]), "rule_version": int(r["version"]),
-            "stable_id": f"{stable}:{r['rule_key']}", "event_stable_id": stable,
-            "fee_item": str(cfg["fee_item"]),
-            "amount": amount,
-            "currency": _fee_currency(cfg, settings=settings),
-            "fee_type": str(cfg.get("fee_type") or "revenue"),
-            "snapshot": {"event": event, "measures_used": measures,
-                         "rule_config": cfg, "breakdown": breakdown},
-            "provenance": {
+        ra = _price_rule(
+            conn, settings=settings, rule=r, measures=measures, priced_on=occurred,
+            snapshot={"event": event, "measures_used": measures},
+            provenance={
                 "event": {"stable_id": stable, "kind": kind,
                           "occurred_at": str(event.get("occurred_at")), "measures": measures},
                 "document_refs": refs,
@@ -650,7 +980,10 @@ def bill_event(conn: Any, *, settings: Settings, tenant_id: str, event: dict[str
                          "mode": cfg.get("mode")},
                 "superseded_rule_ids": superseded,
             },
-        })
+        )
+        ra["stable_id"] = f"{stable}:{r['rule_key']}"
+        ra["event_stable_id"] = stable
+        rules_amounts.append(ra)
 
     journal_proposal_id: int | None = None
     journal_note: str | None = None
@@ -668,6 +1001,7 @@ def bill_event(conn: Any, *, settings: Settings, tenant_id: str, event: dict[str
         audit(conn, tenant_id, "fee_billed", actor="billing-engine", target=stable,
               detail={"fees": len(rules_amounts),
                       "journal_proposal_id": journal_proposal_id})
+        _record_billed("event", tenant_id, rules_amounts)
 
     rows = fetch_all(
         conn, "SELECT * FROM fee_details WHERE tenant_id=%s AND event_stable_id=%s ORDER BY id",
@@ -680,29 +1014,78 @@ def bill_event(conn: Any, *, settings: Settings, tenant_id: str, event: dict[str
     return result
 
 
-def bill_period_snapshot(conn: Any, *, settings: Settings, tenant_id: str, period: str,
-                         snapshot: dict[str, Any], source_ref: str | None = None) -> dict[str, Any]:
-    """日终快照计费（存储费 = 日终库存快照 × 费率）。
-
-    snapshot: {fee_item, as_of, measures: {...}, [refs]}
-    幂等键 = bill-period:<period>:<rule_key>；同 period 重推返回首次结果。
-    """
-    period = str(period or "").strip()
-    if not period:
-        raise ErpError("INVALID_ARGUMENT", "period 不能为空")
+def _validate_snapshot_item(snapshot: Any, *, what: str) -> dict[str, Any]:
     if not isinstance(snapshot, dict):
-        raise ErpError("INVALID_ARGUMENT", "snapshot 须为对象")
+        raise ErpError("INVALID_ARGUMENT", f"{what} 须为对象")
     fee_item = str(snapshot.get("fee_item") or "").strip()
     as_of_raw = str(snapshot.get("as_of") or "").strip()
     measures = snapshot.get("measures")
     if not fee_item:
-        raise ErpError("INVALID_ARGUMENT", "snapshot.fee_item 不能为空")
+        raise ErpError("INVALID_ARGUMENT", f"{what}.fee_item 不能为空")
     if not as_of_raw:
-        raise ErpError("INVALID_ARGUMENT", "snapshot.as_of 不能为空")
+        raise ErpError("INVALID_ARGUMENT", f"{what}.as_of 不能为空")
     if not isinstance(measures, dict) or not measures:
-        raise ErpError("INVALID_ARGUMENT", "snapshot.measures 须为非空对象")
+        raise ErpError("INVALID_ARGUMENT", f"{what}.measures 须为非空对象")
     refs = snapshot.get("refs") if isinstance(snapshot.get("refs"), dict) else {}
-    as_of = _parse_date(as_of_raw, what="snapshot.as_of")
+    return {"fee_item": fee_item,
+            "as_of": _parse_date(as_of_raw, what=f"{what}.as_of"),
+            "measures": measures, "refs": refs, "raw": snapshot}
+
+
+def bill_period_snapshot(conn: Any, *, settings: Settings, tenant_id: str, period: str,
+                         snapshot: dict[str, Any], source_ref: str | None = None) -> dict[str, Any]:
+    """单个日终快照计费（库 API 兼容入口）；批量语义见 bill_period_snapshots。"""
+    return bill_period_snapshots(conn, settings=settings, tenant_id=tenant_id, period=period,
+                                 snapshots=[snapshot], source_ref=source_ref)
+
+
+def bill_period_snapshots(conn: Any, *, settings: Settings, tenant_id: str, period: str,
+                          snapshots: list[dict[str, Any]] | dict[str, Any],
+                          source_ref: str | None = None) -> dict[str, Any]:
+    """日终快照计费（批量、期间幂等、覆盖门禁、一条批次分录）。
+
+    snapshot 每项：{fee_item, as_of, measures: {...}, [refs]}
+    幂等键 = (tenant, period)：event_stable_id = `bill-period:<period>`，
+    明细 stable_id = `bill-period:<period>:<rule_key>`；同期间重跑返回首次结果
+    （duplicate=True），不产生重复费用（UNIQUE(tenant_id, stable_id) 兜底）。
+
+    覆盖缺失（design D9）：整期间判定——登记在用集合缺 active 规则、或请求快照含
+    未登记收费项 → 拒绝且 **不生成部分批次**。
+    """
+    try:
+        return _bill_period_snapshots(conn, settings=settings, tenant_id=tenant_id,
+                                     period=period, snapshots=snapshots,
+                                     source_ref=source_ref)
+    except ErpError as exc:
+        obs.billing_failed(exc.code, path="period", tenant_id=tenant_id,
+                           detail={"stage": exc.detail.get("stage"),
+                                   "fee_items": exc.detail.get("fee_items"),
+                                   "unregistered_fee_items":
+                                       exc.detail.get("unregistered_fee_items"),
+                                   "currency": exc.detail.get("currency"),
+                                   "as_of": exc.detail.get("as_of")})
+        raise
+
+
+def _bill_period_snapshots(conn: Any, *, settings: Settings, tenant_id: str, period: str,
+                           snapshots: list[dict[str, Any]] | dict[str, Any],
+                           source_ref: str | None) -> dict[str, Any]:
+    period = str(period or "").strip()
+    if not period:
+        raise ErpError("INVALID_ARGUMENT", "period 不能为空")
+    if isinstance(snapshots, dict):
+        snapshots = [snapshots]
+    if not isinstance(snapshots, list) or not snapshots:
+        raise ErpError("INVALID_ARGUMENT", "期间快照计费须提供非空 snapshots 数组")
+    items = [_validate_snapshot_item(s, what=f"snapshots[{i}]")
+             for i, s in enumerate(snapshots)]
+    seen: set[str] = set()
+    for it in items:
+        if it["fee_item"] in seen:
+            raise ErpError("INVALID_ARGUMENT",
+                           f"同一期间快照中收费项重复：{it['fee_item']}（每期每项只能报一份日终快照）",
+                           detail={"fee_item": it["fee_item"], "period": period})
+        seen.add(it["fee_item"])
 
     event_stable = f"bill-period:{period}"
     existing = fetch_all(
@@ -713,39 +1096,52 @@ def bill_period_snapshot(conn: Any, *, settings: Settings, tenant_id: str, perio
         return {"fees": [_fee_view(r) for r in existing], "period": period,
                 "stable_id": event_stable, "duplicate": True}
 
+    # 覆盖门禁（整期间判定，先于任何写入）
+    missing = coverage_gap(conn, tenant_id)
+    unregistered: list[str] = []
+    if _registry_adopted(conn, tenant_id):
+        registered = {str(r["fee_item"]) for r in _in_use_fee_items(conn, tenant_id)}
+        unregistered = sorted(seen - registered)
+    if missing or unregistered:
+        named = sorted(set(missing) | set(unregistered))
+        raise ErpError(
+            "FEE_COVERAGE_MISSING",
+            f"日终快照计费被拒：期间 {period} 存在覆盖缺失的收费项（{'、'.join(named)}）",
+            detail={"stage": "period_billing", "period": period,
+                    "fee_items": missing, "unregistered_fee_items": unregistered},
+        )
+
     actives = fetch_all(conn, "SELECT * FROM billing_rules WHERE tenant_id=%s "
                               "AND status='active'", (tenant_id,))
-    chosen: list[dict[str, Any]] = []
-    for r in actives:
-        cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
-        if str(cfg.get("fee_item")) == fee_item and _window_covers(cfg, as_of):
-            chosen.append(r)
-    chosen, superseded = _pick_top_by_item(chosen)
-
     rules_amounts: list[dict[str, Any]] = []
-    for r in chosen:
-        cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
-        amount, breakdown = compute_fee_with_breakdown(cfg, measures)
-        rules_amounts.append({
-            "rule_id": int(r["id"]), "rule_version": int(r["version"]),
-            "stable_id": f"{event_stable}:{r['rule_key']}", "event_stable_id": event_stable,
-            "fee_item": str(cfg["fee_item"]),
-            "amount": amount,
-            "currency": _fee_currency(cfg, settings=settings),
-            "fee_type": str(cfg.get("fee_type") or "revenue"),
-            "snapshot": {"period": period, "snapshot": snapshot,
-                         "measures_used": measures, "rule_config": cfg,
-                         "breakdown": breakdown},
-            "provenance": {
-                "event": {"period": period, "as_of": str(as_of), "measures": measures},
-                "document_refs": refs,
-                "fee_item": str(cfg["fee_item"]),
-                "rule": {"rule_id": int(r["id"]), "version": int(r["version"]),
-                         "rule_key": r["rule_key"], "rate_source": cfg.get("rate_source"),
-                         "mode": cfg.get("mode")},
-                "superseded_rule_ids": superseded,
-            },
-        })
+    for it in items:
+        candidates: list[dict[str, Any]] = []
+        for r in actives:
+            cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
+            if str(cfg.get("fee_item")) == it["fee_item"] and _window_covers(cfg, it["as_of"]):
+                candidates.append(r)
+        chosen, superseded = _pick_top_by_item(candidates)
+        for r in chosen:
+            cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
+            ra = _price_rule(
+                conn, settings=settings, rule=r, measures=it["measures"],
+                priced_on=it["as_of"],
+                snapshot={"period": period, "snapshot": it["raw"],
+                          "measures_used": it["measures"]},
+                provenance={
+                    "event": {"period": period, "as_of": str(it["as_of"]),
+                              "measures": it["measures"]},
+                    "document_refs": it["refs"],
+                    "fee_item": str(cfg["fee_item"]),
+                    "rule": {"rule_id": int(r["id"]), "version": int(r["version"]),
+                             "rule_key": r["rule_key"], "rate_source": cfg.get("rate_source"),
+                             "mode": cfg.get("mode")},
+                    "superseded_rule_ids": superseded,
+                },
+            )
+            ra["stable_id"] = f"{event_stable}:{r['rule_key']}"
+            ra["event_stable_id"] = event_stable
+            rules_amounts.append(ra)
 
     journal_proposal_id: int | None = None
     if rules_amounts:
@@ -762,6 +1158,7 @@ def bill_period_snapshot(conn: Any, *, settings: Settings, tenant_id: str, perio
         audit(conn, tenant_id, "fee_billed", actor="billing-engine", target=event_stable,
               detail={"period": period, "fees": len(rules_amounts),
                       "journal_proposal_id": journal_proposal_id})
+        _record_billed("period", tenant_id, rules_amounts)
 
     rows = fetch_all(
         conn, "SELECT * FROM fee_details WHERE tenant_id=%s AND event_stable_id=%s ORDER BY id",
@@ -810,13 +1207,19 @@ def reverse_fee(conn: Any, *, settings: Settings, tenant_id: str, fee_id: int,
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO fee_details(tenant_id, rule_id, rule_version, stable_id, "
-                "event_stable_id, fee_item, snapshot, amount, currency, provenance, status, "
-                "reversal_of) VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s::jsonb,"
+                "event_stable_id, fee_item, snapshot, amount, original_amount, base_amount, "
+                "currency, fx_rate, fx_as_of, fx_source, provenance, status, reversal_of) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,"
                 "'reversed',%s) ON CONFLICT (tenant_id, stable_id) DO NOTHING",
                 (tenant_id, fee["rule_id"], fee["rule_version"], rev_stable,
                  fee["event_stable_id"], fee["fee_item"],
                  json.dumps(rev_snapshot, ensure_ascii=False), str(fee["amount"]),
-                 fee["currency"], json.dumps(rev_prov, ensure_ascii=False), fee_id),
+                 None if fee.get("original_amount") is None else str(fee["original_amount"]),
+                 None if fee.get("base_amount") is None else str(fee["base_amount"]),
+                 fee["currency"],
+                 None if fee.get("fx_rate") is None else str(fee["fx_rate"]),
+                 fee.get("fx_as_of"), fee.get("fx_source"),
+                 json.dumps(rev_prov, ensure_ascii=False), fee_id),
             )
     rev_row = fetch_one(conn, "SELECT * FROM fee_details WHERE tenant_id=%s AND stable_id=%s",
                         (tenant_id, rev_stable))
@@ -905,13 +1308,34 @@ def get_fee_detail(conn: Any, *, settings: Settings, tenant_id: str,
     replay: dict[str, Any]
     try:
         replay_amount = compute_fee(snap.get("rule_config") or {}, snap.get("measures_used") or {})
-        replay = {"amount": str(replay_amount), "matches": replay_amount == Decimal(str(fee["amount"]))}
+        replay = {"amount": str(replay_amount),
+                  "matches": replay_amount == Decimal(str(fee["amount"]))}
+        # 本位币口径可复算：原币 × 锁定汇率 = base_amount（四要素自洽性）。
+        if fee.get("base_amount") is None or fee.get("fx_rate") is None:
+            replay["base_matches"] = fee.get("base_amount") is not None and \
+                Decimal(str(fee["base_amount"])) == replay_amount
+        else:
+            replay_base = (replay_amount * Decimal(str(fee["fx_rate"]))).quantize(Q6)
+            replay["base_amount"] = str(replay_base)
+            replay["base_matches"] = replay_base == Decimal(str(fee["base_amount"]))
     except ErpError as exc:
         replay = {"amount": None, "matches": False, "error": exc.message}
 
     return {
         "fee": _fee_view(fee),
         "chain": chain,
+        "fx": {
+            "currency": fee["currency"],
+            "original_amount": None if fee.get("original_amount") is None
+                               else str(fee["original_amount"]),
+            "base_amount": None if fee.get("base_amount") is None
+                           else str(fee["base_amount"]),
+            "rate": None if fee.get("fx_rate") is None else str(fee["fx_rate"]),
+            "as_of": None if fee.get("fx_as_of") is None else str(fee["fx_as_of"]),
+            "source": fee.get("fx_source"),
+            "sourced": fee["currency"] == settings.base_currency
+                       or bool(fee.get("fx_source")),
+        },
         "journal": {"proposal_id": jp.get("proposal_id"),
                     "proposal_stable_id": jp.get("stable_id"), "txn_id": txn_id},
         "is_reversed": bool(reversals),

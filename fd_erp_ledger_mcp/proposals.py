@@ -16,6 +16,7 @@ from .db import fetch_all, fetch_one
 from .errors import ErpError
 from .ledger import build_reversal_lines, post_lines, _normalize_lines
 from .tenancy import audit
+from . import observability as obs
 
 # 机器车道白名单（add-supply-chain-vertical 任务 1.x）：计费引擎（submitted_by=
 # "billing-engine"）生成的 proposal 科目限 1300 在途结算款 / 4000 营业收入 /
@@ -86,6 +87,7 @@ def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
     )
     audit(conn, tenant_id, "proposal_submitted", actor=submitted_by,
           target=stable_id, detail={"kind": kind, "reversal_of": reversal_of})
+    obs.proposal_submitted(kind, tenant_id=tenant_id)
     return _proposal_view(row)
 
 
@@ -173,6 +175,7 @@ def confirm_proposal(conn: Any, *, settings: Settings, tenant_id: str,
     audit(conn, tenant_id, "proposal_confirmed", actor=confirmed_by,
           target=row["stable_id"], detail={"txn_id": posted["txn_id"],
                                           "kind": row["kind"], "lines": posted["lines"]})
+    obs.proposal_confirmed(tenant_id=tenant_id, stable_id=row["stable_id"])
     return {"status": "confirmed", "proposal_id": row["id"],
             "stable_id": row["stable_id"], "txn_id": posted["txn_id"],
             "lines": posted["lines"], "idempotent_hit": False}
@@ -204,4 +207,5 @@ def reject_proposal(conn: Any, *, tenant_id: str, proposal_id: int | None = None
         raise ErpError("PROPOSAL_STATE", "proposal 不存在或已裁决，不可拒绝")
     audit(conn, tenant_id, "proposal_rejected", actor=rejected_by,
           target=row[1], detail={"reason": reason})
+    obs.proposal_rejected(tenant_id=tenant_id, stable_id=row[1])
     return {"status": "rejected", "proposal_id": row[0], "stable_id": row[1]}
