@@ -360,4 +360,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             rows = _credit.list_reservations(
                 conn, tenant_id=tenant, customer_id=customer_id,
                 include_expired=include_expired)
-            return {"ok": True, "rows_returned": len(rows), "reservations": rows}
+            # 必须走 paginate：`stamp()` 只认 `result["data"]`，自己写 rows_returned 会被
+            # 覆盖成 0 —— 而 rows_returned 是"按行计费唯一依据"（result.py:4）。
+            # 2026-11-09 生产实测抓到的：本工具返回 2 行却报 rows_returned=0。
+            return paginate(rows, offset=0, limit=0)

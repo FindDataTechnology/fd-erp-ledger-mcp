@@ -274,3 +274,23 @@ def test_cross_tenant_denied(settings):
         from fd_erp_ledger_mcp.credit import ar_balance, reserved_total
         assert ar_balance(conn, "other-corp") == 0
         assert reserved_total(conn, "other-corp", "cust-1") == 0
+
+
+def test_list_credit_reservations_returns_rows_returned_stamp(settings):
+    """只读工具必须如实落行数戳——`rows_returned` 是按行计费的唯一依据。
+
+    2026-11-09 生产实测：工具返回 2 行却报 `rows_returned=0`，因为响应体用
+    `reservations` 键而 `stamp()` 只认 `data`，把自己写的戳覆盖成了 0。
+    """
+    from fd_erp_ledger_mcp.result import stamp
+
+    rows = [{"stable_id": "a"}, {"stable_id": "b"}]
+    # 复现旧形状：自定义键 + 自己写 rows_returned
+    legacy = stamp({"ok": True, "rows_returned": len(rows), "reservations": rows})
+    assert legacy["rows_returned"] == 0, "旧形状确实会被覆盖成 0（这就是那个 bug）"
+
+    # 修后形状：走 paginate，data 是列表，戳应为真实行数
+    from fd_erp_ledger_mcp.result import paginate
+    fixed = stamp(paginate(rows, offset=0, limit=0))
+    assert fixed["rows_returned"] == 2
+    assert fixed["data"] == rows
