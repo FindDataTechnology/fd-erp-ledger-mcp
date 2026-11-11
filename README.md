@@ -48,7 +48,7 @@ fd-erp-ledger-mcp serve --host 0.0.0.0 --port 8000
 |---|---|---|
 | `submit_proposal` | 写(proposal) | 提交拟落账事件，同 `stable_id` 幂等返回首次结果 |
 | `list_proposals` | 读 | 分页查询 proposal 状态 |
-| `confirm_proposal` | 写(确认门) | 唯一落账路径；借贷必平由 DB 约束强制 |
+| `confirm_proposal` | 写(确认门) | 拟稿车道的唯一落账入口（导入车道的事实不需确认）；借贷必平由 DB 约束强制 |
 | `reject_proposal` | 写 | 拒绝留痕、不落账 |
 | `query_balance` | 读 | 余额由分录确定性重算，无直写余额字段 |
 | `query_entries` | 读 | 分页查询已落账分录（含出处/来源/冲正关联） |

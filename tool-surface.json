@@ -482,7 +482,7 @@
         "confirm_proposal",
         "reject_proposal"
       ],
-      "description": "拟落账事件（proposal）车道：写路径只出 proposal，确认门是唯一落账路径，拒绝留审计痕且不落账；稳定 id 幂等去重。"
+      "description": "拟落账事件（proposal）车道：agent 写路径只出 proposal，经确认门才成为事实（外部事实走 event 组的导入车道）；拒绝留审计痕且不落账；稳定 id 幂等去重。"
     },
     {
       "group": "ledger",

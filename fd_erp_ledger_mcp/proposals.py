@@ -1,7 +1,7 @@
 """确认车道（erp-ledger-kernel agent 只写 proposal）。
 
 - submit_proposal 只创建 pending 提案，绝不改变账本状态。
-- confirm_proposal 是唯一落账路径；对齐柏讯 propose/confirm 契约的
+- confirm_proposal 是拟稿车道的落账入口（导入车道事实不经确认）；对齐柏讯 propose/confirm 契约的
   fleet identity turn 车道（fleet=/post=/title=/target= 语义字段）。
 - 幂等：同 stable_id 重复提交返回首次结果（唯一索引 + SELECT 回读）。
 - 拒绝留痕不落账。

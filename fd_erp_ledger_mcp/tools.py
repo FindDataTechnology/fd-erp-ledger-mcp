@@ -1,6 +1,6 @@
 """32 个 MCP 工具（账本面 2.1-2.4 + 计费 1.x + 信用 4.2 + 事件/数量/过账 establish-erp-event-kernel 5.1）。
 
-写路径只出 proposal 或拟稿事件，无任何直写落账工具；确认门是唯一落账入口。
+agent 写路径只出 proposal 或拟稿事件（确认门是拟稿的唯一落账入口）；外部事实经导入车道上牌直收，不经确认门。
 全部工具经 safe_tool 统一错误语义 + rows_returned 计量戳。
 """
 from __future__ import annotations
@@ -69,7 +69,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             rows = _list(conn, tenant, status)
             return paginate(rows, offset=offset, limit=limit)
 
-    # ---- 3. confirm_proposal：确认门（唯一落账路径）----
+    # ---- 3. confirm_proposal：确认门（拟稿车道的落账入口）----
     @mcp.tool(annotations=annotations_for("confirm_proposal"))
     @safe_tool
     def confirm_proposal(
