@@ -137,22 +137,43 @@ def _redact_value(value: Any, *, key_hint: str = "") -> Any:
     return value
 
 
-def redact(fields: dict[str, Any]) -> dict[str, Any]:
-    """落盘前打码：凭据/连接串/租户明文。返回新 dict，不改调用方对象。
+_SEP = re.compile(r"[^a-z0-9]+")
+
+
+def _key_token(key: Any) -> str:
+    """键名归一：只留小写字母数字。
+
+    逐字子串匹配会漏掉分隔符变体——`_SENSITIVE_KEY_HINTS` 里写的是 `api_key`，
+    而 `apiKey` / `api-key` 都不含 `api_key`，于是明码落盘（实测漏）。
+    归一后 `api_key` / `apiKey` / `api-key` / `API_KEY` 全变成 `apikey`。
+    """
+    return _SEP.sub("", str(key).lower())
+
+
+#: 归一后的敏感键标记（模块加载时算一次，避免每行日志重复正则）
+_HINT_TOKENS = tuple(_key_token(h) for h in _SENSITIVE_KEY_HINTS)
+
+
+def redact(fields: Any) -> Any:
+    """落盘前打码：凭据/连接串/租户明文。返回新对象，不改调用方对象。
 
     dict/list 递归到底：只打顶层会漏掉 detail={"dsn": "postgresql://…"} 这类嵌套形态，
-    而「日志 MUST NOT 含连接串」不区分层级。
+    而「日志 MUST NOT 含连接串」不区分层级。顶层不是 dict（list/tuple/标量）时
+    直接走 _redact_value——旧实现在这里抛 AttributeError，等于「日志打码失败」
+    变成「记日志崩掉」。
     """
+    if not isinstance(fields, dict):
+        return _redact_value(fields)
     out: dict[str, Any] = {}
     for key, value in fields.items():
-        low = str(key).lower()
-        if low == "tenant_id":
+        token = _key_token(key)
+        if token == "tenantid":
             out["tenant_hash"] = tenant_hash(str(value))
             continue
-        if any(hint in low for hint in _SENSITIVE_KEY_HINTS):
+        if any(hint in token for hint in _HINT_TOKENS):
             out[key] = "[redacted]"
             continue
-        out[key] = _redact_value(value, key_hint=low)
+        out[key] = _redact_value(value, key_hint=token)
     return out
 
 
