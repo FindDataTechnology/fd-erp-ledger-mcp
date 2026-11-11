@@ -44,7 +44,9 @@ def _reset_db(request):
                 cur.execute(
                     "TRUNCATE proposals, journal_entries, fx_facts, recon_reports, "
                     "recon_task_items, audit, accounts, billing_rules, fee_details, "
-                    "billing_fee_items, credit_registry, credit_reservations "
+                    "billing_fee_items, credit_registry, credit_reservations, "
+                    "posting_gaps, posting_links, posting_rules, "
+                    "object_balances, object_events, business_events, event_revisions "
                     "RESTART IDENTITY CASCADE"
                 )
     finally:

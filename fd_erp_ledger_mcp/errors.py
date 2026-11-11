@@ -33,6 +33,15 @@ def map_psycog_error(exc: Exception) -> ErpError:
     """把数据库约束/连接异常映射为封闭码，绝不伪装成空成功。"""
     text = str(exc)
     # SQLSTATE 23514 = check_violation；我们在约束消息里埋了稳定前缀。
+    # 事件层的专属前缀必须排在 ERP_APPEND_ONLY 之前：两者都含 append-only 语义，
+    # 但事件层的处置不同（改定型事件=提交冲正；改分录=走冲正分录），混淆会把
+    # 调用方指向错误的修法。
+    if "ERP_EVENT_IMMUTABLE" in text:
+        return ErpError("EVENT_IMMUTABLE", f"数据库拒绝改写事件：{text}")
+    if "ERP_OBJECT_CONFLICT" in text:
+        return ErpError("OBJECT_CONFLICT", f"数据库拒绝对象投影写入：{text}")
+    if "ERP_EVENT_UNKNOWN_TYPE" in text:
+        return ErpError("EVENT_UNKNOWN_TYPE", f"事件类型未登记：{text}")
     if "ERP_UNBALANCED" in text or "check_violation" in text and "balance" in text.lower():
         return ErpError("UNBALANCED", f"数据库拒绝不平分录：{text}")
     if "ERP_APPEND_ONLY" in text or "append_only" in text.lower():

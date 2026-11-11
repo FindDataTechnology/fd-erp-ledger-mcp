@@ -94,6 +94,30 @@ CATALOG: dict[str, ErrorCode] = {
         "CREDIT_EXCEEDED", "invalid_argument", False,
         "信用额度不足；detail 含额度明细（上限/应收余额/已占用/本次请求/可用）。",
     ),
+    # 事件层（change: establish-erp-event-kernel）
+    "EVENT_IMMUTABLE": ErrorCode(
+        "EVENT_IMMUTABLE", "invalid_argument", False,
+        "事件已定型或字段不可改写；更正须提交冲正事件，定型前修订须走 revision 通道"
+        "（保留旧值、修订来源与时点）。",
+    ),
+    "EVENT_UNKNOWN_TYPE": ErrorCode(
+        "EVENT_UNKNOWN_TYPE", "invalid_argument", False,
+        "事件类型未在注册表登记（封闭集）；请先登记类型与载荷 schema，"
+        "不要以未定义语义的事实写入。",
+    ),
+    "EVENT_STATE": ErrorCode(
+        "EVENT_STATE", "invalid_argument", False,
+        "事件状态不允许该迁移（仅 pending→accepted/rejected、accepted→reversed）。",
+    ),
+    "OBJECT_CONFLICT": ErrorCode(
+        "OBJECT_CONFLICT", "invalid_argument", False,
+        "对象余额是投影产物、不可直写；或同一对象维度下出现单位冲突（kg 与 pcs 不可相加）。",
+    ),
+    "POSTING_RULE_MISSING": ErrorCode(
+        "POSTING_RULE_MISSING", "not_wired", False,
+        "该事件类型没有命中的过账规则，故未落账（不猜科目）；detail 点名缺失的规则类型"
+        "与所需科目，事件留在待补清单。",
+    ),
     "INTERNAL": ErrorCode(
         "INTERNAL", "upstream", True,
         "服务内部错误，可重试；若持续请联系运维。",

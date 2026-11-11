@@ -24,7 +24,12 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 0005：fee_details 增 original_amount / base_amount / fx_rate / fx_as_of / fx_source
 #:       与收费项登记表 billing_fee_items（change: optimize-erp-solution 5.1/5.5）。
 #: 0006：recon_reports 增 request（对账任务重启续跑依据；同上 change 6.5）。
-REQUIRED_SCHEMA_VERSION = "0006_recon_task_request"
+#: 0007：事件层 business_events / event_types / event_revisions + 只追加与定型触发器
+#:       （change: establish-erp-event-kernel 1.1/1.2）。
+#: 0008：数量面 objects / object_events / object_balances + 投影入口与重算
+#:       （同上 change 2.1-2.3）。
+#: 0009：过账 posting_rules / posting_links / posting_gaps（同上 change 3.1-3.4）。
+REQUIRED_SCHEMA_VERSION = "0009_posting_rules"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
