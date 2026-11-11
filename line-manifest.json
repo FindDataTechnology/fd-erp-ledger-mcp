@@ -1,0 +1,36 @@
+{
+  "schema": "line-manifest/v1",
+  "line": "erp",
+  "public_base_url": "https://mcp.finddatatech.cloud/fd-erp-ledger-mcp",
+  "identity": {
+    "issuer": "https://auth.finddatatech.cloud/oidc",
+    "jwks_uri": "https://auth.finddatatech.cloud/oidc/jwks",
+    "jit_policy": "off",
+    "note": "issuer 记的是该线客户身份所属的租户 IdP，不是本仓已实现的验签：本仓入站零凭据校验——FastMCP 创建无任何 auth 参数/中间件（server.py:24、cli.py:37-41），自定义路由只有 /health 与 /metrics。公网入口 https://mcp.finddatatech.cloud/fd-erp-ledger-mcp/mcp 的 401 由网关判（网关只做纯路由 + 剥调用方 Authorization），集群 mesh http://cheap6.mesh.finddata.cn:31910/mcp 直连不验任何凭据。无断言兑换端点，故 jit_policy=off。"
+  },
+  "auth_tracks": [
+    {
+      "kind": "customer-key",
+      "name": "ciyuan-sk",
+      "accepts": "ciyuan-sk",
+      "fallback": false,
+      "enforced": false,
+      "migration_task": "converge-line-identity-and-keys#8.5",
+      "note": "未接：本仓不解析任何入站凭据，词元客户钥匙今天打进来也只是被当作不存在。客户现在的实际路径是「平台 registry 凭据经网关代调」——那是第三方/平台中介，不是本线的钥匙轨。"
+    }
+  ],
+  "scopes": [
+    "line:read",
+    "line:write"
+  ],
+  "billing": {
+    "plane": "ciyuan",
+    "note": "本仓零 sub2api/词元平面代码：计量只到「每个成功响应写 rows_returned 戳」（result.py:14-21、metering.py:1-7 明说额度闸/审计事件由 registry 承担、本模块不臆造计费动作）。按调用扣费发生在网关/registry（词元平面），不在本线代码里。billing.py 是**业务域费用**（存储费类，规则版本化 + 审批 + 红冲，migrations/0003_billing.sql:41-76），不是向本线消费者计费的证据——故不写 own。"
+  },
+  "surfaces": {
+    "mcp": true,
+    "account": false,
+    "admin": false
+  },
+  "note": "本清单刻意留一条 repo-class FAIL「回退轨缺失」：ERP 今天既无线自有常命钥匙（ERP_BYOK_ 是出站凭证，byok.py:10、recon/adapters.py:169-174），也无入站凭据校验，故没有任何 enforced 轨可标 fallback。surfaces.account=false（无按客户的用量/账单面，billing 暴露的是业务域费用数据）；surfaces.admin=false（运维动作全是 CLI 子命令：migrate/check-schema/mark-adopted/seed-fx/set-credit-limit/register-fee-item，无 HTTP 管理面，无 line:admin）。两处必须留痕的漂移：① 线上镜像源 757a83e 是 21 工具，仓内 tool-surface 声明 32（32 工具的 91faa4e 与事件内核 bdb800d 都不在 757a83e 内）；② tool-surface 的「业务事件内核…账本投影」是仓 HEAD 的目标态，线上仍是 pre-event-kernel 的账本内核。另：deploy/README.md 写发布通道是 gitee，实际远端是 GitHub scs001，两处不一致属既有事实。"
+}
