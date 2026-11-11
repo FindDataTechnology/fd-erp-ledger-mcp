@@ -103,20 +103,46 @@ def test_r1_revision_after_finalization_is_denied(settings):
 
 
 def test_r1_finalization_is_period_derived_not_global_seconds(settings):
-    """定型判定按事件自身周期：同一 now() 下，昨天定型、今天未定型。
+    """定型判定按事件自身周期：同一 as_of 下，昨天定型、今天未定型。
 
     若改成"写入距今 N 秒"的全局阈值，本用例必红。
     """
     with connection(settings) as conn:
-        row = conn.execute(
-            "SELECT finality_granularity, revision_window FROM event_types "
+        gran, window, tz = conn.execute(
+            "SELECT finality_granularity, revision_window, period_timezone FROM event_types "
             "WHERE event_type='goods_received'").fetchone()
-        gran, window = row
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         yesterday = today - timedelta(days=1)
-        f_y = conn.execute("SELECT erp_event_is_finalized(%s,%s,%s)", (yesterday, gran, window)).fetchone()[0]
-        f_t = conn.execute("SELECT erp_event_is_finalized(%s,%s,%s)", (today, gran, window)).fetchone()[0]
+        f_y = conn.execute("SELECT erp_event_is_finalized(%s,%s,%s,now(),%s)",
+                           (yesterday, gran, window, tz)).fetchone()[0]
+        f_t = conn.execute("SELECT erp_event_is_finalized(%s,%s,%s,now(),%s)",
+                           (today, gran, window, tz)).fetchone()[0]
         assert f_y is True and f_t is False
+
+
+def test_r1_finalization_is_independent_of_session_timezone(settings):
+    """定型时刻不能随"谁连的库"变化（2026-11-12 实测抓到的假绿修回来的洞察）。
+
+    原实现直接用 date_trunc(text, timestamptz)，周期边界按会话 TimeZone 解释：
+    同一条日粒度事件在 +08 的连接上于本地午夜定型、在 UTC 上晚 8 小时定型。
+    本用例把同一 as_of 在三个会话时区下各算一次，要求答案完全相同。
+    """
+    as_of = datetime(2026, 6, 15, 16, 30, tzinfo=timezone.utc)
+    occurred = datetime(2026, 6, 15, 0, 0, tzinfo=timezone.utc)
+    answers = {}
+    for session_tz in ("UTC", "Asia/Shanghai", "America/New_York"):
+        conn = psycopg.connect(settings.database_url, autocommit=True)
+        try:
+            # 会话时区用标识符拼进去（SET TIME ZONE 不接受绑定参数）
+            conn.execute(f"SET TIME ZONE '{session_tz}'")
+            answers[session_tz] = conn.execute(
+                "SELECT erp_event_is_finalized(%s, %s, INTERVAL '0', %s, 'UTC')",
+                (occurred, "day", as_of)).fetchone()[0]
+        finally:
+            conn.close()
+    assert len(set(answers.values())) == 1, f"定型判定随会话时区变化：{answers}"
+    # 该 as_of 落在 UTC 当日 16:30 → 未定型；换 +08 也必须是未定型（边界按 UTC 解释）
+    assert answers["UTC"] is False
 
 
 # ------------------------------- R2 更正只冲正 -------------------------------

@@ -29,7 +29,9 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 0008：数量面 objects / object_events / object_balances + 投影入口与重算
 #:       （同上 change 2.1-2.3）。
 #: 0009：过账 posting_rules / posting_links / posting_gaps（同上 change 3.1-3.4）。
-REQUIRED_SCHEMA_VERSION = "0009_posting_rules"
+#: 0010：定型边界时区显式化 event_types.period_timezone + erp_event_is_finalized 改签名
+#:       （同上 change；修「定型时刻随会话时区漂移」的缺陷，见该迁移注释）。
+REQUIRED_SCHEMA_VERSION = "0010_period_timezone"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
