@@ -24,6 +24,10 @@
     每个工具自报的 error_codes ⊆ 该封闭集合（不允许临时造码）
   - output_structure 的 declared ∪ undeclared == 全 32 工具且互斥（无静默空缺），
     每个 declared 工具都有 tool_fields
+  - agent 侧工具书（toolkit/catalog.json）与工具面同口径：组数、组名、每组工具集
+    与 canonical 32 逐组相等（说明书可以改措辞，但不能改口径）。卡/README 的
+    逐段判据在 scripts/check_toolkit.py；这里只钉住「目录 == 工具面」这一层，
+    让工具面自检发现「工具面加了工具但工具书没跟上」。
 
 退出码：0 = PASS / 1 = FAIL（逐条列出差异）。
 """
@@ -37,6 +41,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 MANIFEST = REPO / "tool-surface.json"
+TOOLKIT_CATALOG = REPO / "toolkit" / "catalog.json"
 SERVER_NAME = "fd-erp-ledger-mcp"
 
 # ---- canonical 真值（offline 镜像；改动请先改 /tmp/erp-kernel-contract.md）----
@@ -158,6 +163,61 @@ def group_tools(m: dict) -> tuple[set[str], set[str], list[str]]:
     return all_tools, commercial, problems
 
 
+def check_toolkit_alignment(m: dict, surface_tools: set[str]) -> list[str]:
+    """工具书 catalog ↔ 工具面：组数/组名/每组工具集逐组相等。
+
+    工具面是能力真源，工具书是说明书；两者可以措辞不同，但「有哪些组、每组有
+    哪些工具」必须同口径。新增工具而工具书未跟进 → 失败并提示补卡（不是删工具）。
+    """
+    problems: list[str] = []
+    if not TOOLKIT_CATALOG.exists():
+        return [f"[工具书缺失] {TOOLKIT_CATALOG} 不存在（工具面须配 agent 侧说明书）"]
+    try:
+        catalog = json.loads(TOOLKIT_CATALOG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as err:
+        return [f"[工具书不可解析] {TOOLKIT_CATALOG}：{err}"]
+
+    groups = catalog.get("groups")
+    if not isinstance(groups, list) or not groups:
+        return ["[工具书缺失] catalog.groups 为空（8 组工具书须逐组登记）"]
+
+    surface_groups: dict[str, set[str]] = {}
+    for g in m.get("tool_groups") or []:
+        surface_groups[g.get("group")] = set(g.get("tools") or [])
+
+    cat_groups: dict[str, set[str]] = {}
+    cat_all: set[str] = set()
+    for g in groups:
+        gid = g.get("id")
+        tools = {t for t in (g.get("tools") or []) if isinstance(t, str)}
+        if not isinstance(gid, str):
+            problems.append("[工具书口径] catalog 组缺 id")
+            continue
+        if gid in cat_groups:
+            problems.append(f"[工具书口径] catalog 组重复：{gid}")
+        cat_groups[gid] = tools
+        cat_all.update(tools)
+
+    for gid in sorted(set(surface_groups) - set(cat_groups)):
+        problems.append(f"[工具书口径] 工具面组 {gid!r} 在 catalog 缺登记")
+    for gid in sorted(set(cat_groups) - set(surface_groups)):
+        problems.append(f"[工具书口径] catalog 组 {gid!r} 在工具面不存在")
+    for gid in sorted(set(surface_groups) & set(cat_groups)):
+        only_surface = sorted(surface_groups[gid] - cat_groups[gid])
+        only_catalog = sorted(cat_groups[gid] - surface_groups[gid])
+        if only_surface:
+            problems.append(f"[工具书口径] 组 {gid}: 工具面有、catalog 缺：{', '.join(only_surface)}")
+        if only_catalog:
+            problems.append(f"[工具书口径] 组 {gid}: catalog 多登记：{', '.join(only_catalog)}")
+
+    if cat_all != surface_tools:
+        problems.append(
+            "[工具书口径] catalog 工具并集与工具面不符："
+            f"缺 {sorted(surface_tools - cat_all)} / 多 {sorted(cat_all - surface_tools)}"
+        )
+    return problems
+
+
 def check() -> tuple[list[str], dict]:
     problems: list[str] = []
     m = load_manifest()
@@ -180,6 +240,9 @@ def check() -> tuple[list[str], dict]:
 
     g_tools, commercial, g_problems = group_tools(m)
     problems += g_problems
+
+    # ---- 工具书 catalog ↔ 工具面（说明书不得改口径）----
+    problems += check_toolkit_alignment(m, g_tools)
 
     # ---- 方向 1：一致（manifest ↔ canonical 运行时真值），两个方向都查 ----
     # (b) tool_annotations + tool_groups 的工具集 == canonical 8
@@ -328,6 +391,13 @@ def main() -> int:
         ec = m.get("error_codes", {})
         print(f"错误码          : {len(ec.get('codes', []))} 个封闭码 / "
               f"{len(set(ec.get('semantic_classes', [])))} 类语义")
+        try:
+            tk = json.loads(TOOLKIT_CATALOG.read_text(encoding="utf-8")) if TOOLKIT_CATALOG.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            tk = {}
+        tk_groups = tk.get("groups") or []
+        print(f"工具书          : {len(tk_groups)} 组 / "
+              f"{sum(len(g.get('tools', [])) for g in tk_groups if isinstance(g, dict))} 工具")
     print(f"方向1 一致     : manifest ↔ canonical 运行时真值")
     print(f"方向2 闭合     : 暴露集({len(exposure)}) ⊆ commercial({len(commercial)})")
     print("-" * 60)

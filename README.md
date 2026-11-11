@@ -44,6 +44,9 @@ fd-erp-ledger-mcp serve --host 0.0.0.0 --port 8000
 
 ## 32 个工具
 
+> agent 侧说明书见 `toolkit/README.md`（8 组卡 + `catalog.json` + 岗位覆盖表）；
+> 下表是工具面概览，工具面真源是 `tool-surface.json`。
+
 | 工具 | 车道 | 说明 |
 |---|---|---|
 | `submit_proposal` | 写(proposal) | 提交拟落账事件，同 `stable_id` 幂等返回首次结果 |

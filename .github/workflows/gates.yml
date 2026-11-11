@@ -48,3 +48,7 @@ jobs:
       # 工具面自检：surface 声明与实际注册必须双向一致（章程 3.7 D4），不需要库。
       - name: Tool surface selfcheck
         run: python scripts/selfcheck_surface.py
+
+      # agent 侧工具书闸：catalog/8 张卡/README 与工具面逐工具一致 + 硬纪律与二清红线。
+      - name: Toolkit gate
+        run: python scripts/check_toolkit.py
