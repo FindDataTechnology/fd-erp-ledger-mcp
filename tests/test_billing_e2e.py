@@ -136,7 +136,7 @@ def test_billing_full_chain_event_period_confirm_balance_replay_reversal(setting
         assert again["duplicate"] is True
         assert [f["fee_id"] for f in again["fees"]] == [period_fee["fee_id"]]
 
-        # ---- 3. 确认门（唯一落账路径）：先事件后快照 ----
+        # ---- 3. 确认门（拟稿车道的落账入口）：先事件后快照 ----
         event_confirm = confirm_proposal(conn, settings=settings, tenant_id=TENANT,
                                          stable_id=EVENT_JOURNAL)
         assert event_confirm["status"] == "confirmed"
