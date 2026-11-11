@@ -6,7 +6,7 @@
 
 双向断言（对应 spec「selfcheck 双向断言」）：
   方向 1 · 一致（manifest ↔ 运行时注册真值）：
-      manifest 的 tool_annotations / tool_groups 工具集，必须与 canonical 21 工具集
+      manifest 的 tool_annotations / tool_groups 工具集，必须与 canonical 32 工具集
       （hardcode：8 基础账本 + 计费 9 + 信用 4，add-supply-chain-vertical 任务 1.x/4.2
       + optimize-erp-solution 5.3 的 bill_period_snapshot）
       逐名相等。
@@ -14,15 +14,15 @@
       新增/删除工具而 manifest 未同步 → 失败并点名差异。
   方向 2 · 闭合（对外暴露集 ⊆ commercial 集）：
       消费侧/网关欲暴露的工具集必须落在 manifest 的 commercial 集内。
-      默认暴露集 = canonical 21；可用 --expose 传入逗号分隔工具名模拟某个 pack
+      默认暴露集 = canonical 32；可用 --expose 传入逗号分隔工具名模拟某个 pack
       的声明，越界（点名 internal/不存在工具）即失败。
 
 另有静态完整性断言（闭环，不依赖运行时）：
-  - registry.expected_tool_count == 21
+  - registry.expected_tool_count == 32
   - 每个 commercial 工具声明齐全的行为属性（只读/破坏性/幂等/openWorld 四 hint）
   - 封闭错误码集合非空、语义类 ≥4 类可区分、且与运行时 CATALOG 镜像一致；
     每个工具自报的 error_codes ⊆ 该封闭集合（不允许临时造码）
-  - output_structure 的 declared ∪ undeclared == 全 21 工具且互斥（无静默空缺），
+  - output_structure 的 declared ∪ undeclared == 全 32 工具且互斥（无静默空缺），
     每个 declared 工具都有 tool_fields
 
 退出码：0 = PASS / 1 = FAIL（逐条列出差异）。
@@ -303,7 +303,7 @@ def main() -> int:
     ap.add_argument(
         "--expose",
         default="",
-        help="逗号分隔的工具名，模拟某 pack/消费侧声明的暴露集（默认=canonical 21）。用于验证闭合方向。",
+        help="逗号分隔的工具名，模拟某 pack/消费侧声明的暴露集（默认=canonical 32）。用于验证闭合方向。",
     )
     args = ap.parse_args()
 

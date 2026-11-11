@@ -42,7 +42,7 @@ fd-erp-ledger-mcp serve --host 0.0.0.0 --port 8000
 零配置启动：`create_server()` 不连库；缺数据源时调用点如实报
 `UPSTREAM_UNAVAILABLE`。
 
-## 21 个工具
+## 32 个工具
 
 | 工具 | 车道 | 说明 |
 |---|---|---|

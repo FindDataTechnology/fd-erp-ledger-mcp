@@ -710,6 +710,6 @@
   "notes": {
     "compliance_boundary": "二清红线：资金归集/代收代付/分账平台只做对账与核对指令层，资金走客户自选持牌通道；开票/税务申报不自研（挂账），账内可记录发票类事件参与对账、票据本体由客户既有合规渠道处理。信用占用为备忘性质，不执行资金放款/扣款。",
     "honest_caliber": "本 manifest 与 deploy 清单均为 publish-ready 工件：网关路由未上线、registry 快照未 live 写入、谦面市场未上架、镜像未构建。Live publish / gateway rollout / registry push / 官网 deploy 均属 DEPLOY 步骤（需 live 凭据），本 apply 挂账。",
-    "no_internal_group": "21 工具全部 commercial，无 internal 组；消费侧暴露集 ⊆ commercial 集闭合。"
+    "no_internal_group": "32 工具全部 commercial，无 internal 组；消费侧暴露集 ⊆ commercial 集闭合。"
   }
 }
