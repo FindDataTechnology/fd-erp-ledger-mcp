@@ -21,11 +21,16 @@ EXPECTED_TOOLS = {
     "bill_event", "list_fees", "get_fee_detail", "reverse_fee", "simulate_billing",
     "bill_period_snapshot",
     "reserve_credit", "release_credit", "query_credit", "list_credit_reservations",
+    # 事件层 / 数量面 / 过账层（establish-erp-event-kernel 5.1）
+    "ingest_event", "submit_event", "decide_event", "query_events",
+    "query_object_balance", "project_event",
+    "submit_posting_rule", "approve_posting_rule", "list_posting_rules",
+    "post_event", "list_posting_gaps",
 }
 
 
 def test_create_server_zero_config_lists_full_tool_surface():
-    """零配置 create_server 可握手；工具面恰为契约 21 个。"""
+    """零配置 create_server 可握手；工具面恰为契约 32 个。"""
     from fd_erp_ledger_mcp.server import create_server
     server = create_server(Settings(database_url=None))
 
@@ -37,7 +42,7 @@ def test_create_server_zero_config_lists_full_tool_surface():
     import asyncio
     names = asyncio.run(go())
     assert names == EXPECTED_TOOLS
-    assert len(EXPECTED_TOOLS) == 21
+    assert len(EXPECTED_TOOLS) == 32
 
 
 def test_tool_layer_rows_returned_stamp(settings):

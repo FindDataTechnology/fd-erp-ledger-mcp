@@ -32,6 +32,20 @@ _ANNOTATIONS: dict[str, dict[str, Any]] = {
     "query_credit":        {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
     # 占用明细（change: close-orphan-credit-reservations）——孤儿报表的读原语
     "list_credit_reservations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+    # 事件层（change: establish-erp-event-kernel）
+    "ingest_event":         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "submit_event":         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "decide_event":         {"readOnlyHint": False, "destructiveHint": True,  "idempotentHint": True,  "openWorldHint": False},
+    "query_events":         {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    # 数量面
+    "query_object_balance": {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "project_event":        {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    # 过账层
+    "submit_posting_rule":  {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+    "approve_posting_rule": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "list_posting_rules":   {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "post_event":           {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "list_posting_gaps":    {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
 }
 
 

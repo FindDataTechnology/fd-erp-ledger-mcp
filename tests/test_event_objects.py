@@ -112,9 +112,34 @@ def test_ledger_has_no_quantity_column(settings):
 
 
 def test_projection_of_unknown_event_is_rejected(settings):
+    """服务层给封闭码 NOT_FOUND；数据库函数自身也拒（两道都在）。"""
+    from fd_erp_ledger_mcp.errors import ErpError
     with connection(settings) as conn:
-        with pytest.raises(psycopg.Error) as ei:
+        with pytest.raises(ErpError) as ei:
             events.project_object_event(conn, tenant_id=TENANT, event_id=999999,
                                         object_type="sku", object_key="SKU-1",
                                         quantity_delta=1, unit="pcs")
-        assert "no event id" in str(ei.value)
+        assert ei.value.code == "NOT_FOUND"
+        # 绕过服务层直调数据库函数同样被拒
+        with pytest.raises(psycopg.Error) as di:
+            conn.execute("SELECT erp_project_object_event(%s,%s,%s,%s::jsonb,%s,%s)",
+                         (999999, "sku", "SKU-1", "{}", 1, "pcs"))
+        assert "no event id" in str(di.value)
+
+
+def test_pending_draft_event_cannot_be_projected(settings):
+    """未过确认门的拟稿事件不算事实：投影必须拒，否则草稿能变成库存。"""
+    with connection(settings) as conn:
+        ev = events.append_event(
+            conn, settings=settings, tenant_id=TENANT, event_type="goods_received",
+            stable_id="grn-draft", occurred_at=datetime.now(timezone.utc), lane="draft",
+            payload={"sku": "SKU-1", "quantity": 999, "unit": "pcs", "warehouse": "WH1"})
+        from fd_erp_ledger_mcp.errors import ErpError
+        with pytest.raises(ErpError) as ei:
+            events.project_object_event(conn, tenant_id=TENANT, event_id=ev["id"],
+                                        object_type="sku", object_key="SKU-1",
+                                        quantity_delta=999, unit="pcs")
+        assert ei.value.code == "EVENT_STATE"
+        bal = events.query_object_balance(conn, tenant_id=TENANT, object_type="sku",
+                                          object_key="SKU-1")
+        assert bal["quantity"] is None

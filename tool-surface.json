@@ -3,12 +3,12 @@
   "server": "fd-erp-ledger-mcp",
   "entry_path": "/fd-erp-ledger-mcp",
   "product_line": "erp",
-  "product_line_note": "ERP 是板块级标签（board），不是五条 ladder 业务线之一；双语同形（EN=ERP / 中文=ERP）。见 /tmp/erp-kernel-contract.md（本 change 的 controlling contract）。",
+  "product_line_note": "ERP 是板块级标签（board），不是五条 ladder 业务线之一；双语同形（EN=ERP / 中文=ERP）。仓名与 entry path 沿用 `ledger`（已注册契约：市场 packId、registry、两份 kernel_client 都引用它），但定位自 change establish-erp-event-kernel 起是「业务事件内核（含账本投影）」——名字与定位的差异在此明示，不靠改名解决。",
   "hosting": [
     "shared-instance"
   ],
   "hosting_note": "默认共享实例（本 apply 交付的 publish-ready 清单即此形态）；另规划 appliance / 私有化部署三档（vertical-appliance-delivery，packer 可打进整机包），该适配归 task 7.2、本 apply 未交付、挂账。",
-  "description": "账本内核 MCP（ERP 板块）：复式事件账 + 确认车道 + 只读对账滩头 + 计费规则引擎 + 信用额度。写路径只出 proposal，确认门是唯一落账路径（借贷必平由 DB 触发器强制，已落账分录与费用明细 append-only）；余额由分录确定性重算、无直写余额字段；对账引擎对外部系统零写入、四类差异双侧原始引用留痕。计费：规则版本化 + 人工审批上线 + 冲突拦截 + 计费快照幂等可重算 + 红冲留痕 + 四层溯源 + 无出处费率拒绝；计费落账走 billing-engine 机器车道 proposal（1300/4000/费用类白名单），不绕过确认门。信用：额度口径=账本衍生（limit − 1300 应收余额 − active 占用），占用为备忘性质不写复式分录。如实守界：不做单体 ERP 应用/表单 UI、不自研开票/税务申报、不执行资金归集/代收代付/分账（二清红线，资金走客户自选持牌通道）。BYOK 凭证经环境变量注入、零落库零日志。",
+  "description": "业务事件内核 MCP（ERP 板块，含账本投影）：事件层 + 数量面 + 过账层 + 账本 + 确认车道 + 只读对账滩头 + 计费规则引擎 + 信用额度。事件只追加、定型后不可改写（定型按事件自身周期，非全局秒数）、更正只走冲正；两条车道——ingest 外部原始事实写入即是事实、draft 为 agent 拟稿且未过确认门不算事实。数量面（库存/在途/占用）是对象投影，余额由事件确定性重算并带水位、不可直写；账本只记金额，数量不进分录。过账由版本化规则确定性映射，规则须审批上线、同事件类型仅一条 active、升版不重写历史；缺规则不猜科目，事件挂待补清单、余额不变。写路径只出 proposal / 拟稿事件，确认门是唯一落账路径（借贷必平由 DB 触发器强制，已落账分录与费用明细 append-only）；余额由分录确定性重算、无直写余额字段；对账引擎对外部系统零写入、四类差异双侧原始引用留痕。计费：规则版本化 + 人工审批上线 + 冲突拦截 + 计费快照幂等可重算 + 红冲留痕 + 四层溯源 + 无出处费率拒绝；计费落账走 billing-engine 机器车道 proposal（1300/4000/费用类白名单），不绕过确认门。信用：额度口径=账本衍生（limit − 1300 应收余额 − active 占用），占用为备忘性质不写复式分录。如实守界：不做单体 ERP 应用/表单 UI、不自研开票/税务申报、不执行资金归集/代收代付/分账（二清红线，资金走客户自选持牌通道）。BYOK 凭证经环境变量注入、零落库零日志。",
   "skills_eligible_for_packs": [
     "erp-ledger-discipline"
   ],
@@ -317,6 +317,159 @@
         "SCHEMA_OUTDATED",
         "UPSTREAM_UNAVAILABLE"
       ]
+    },
+    "ingest_event": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 导入车道：写入来自外部系统的原始事实，写入即成为事实（accepted）。同 (租户, 车道, stable_id) 幂等；事件只追加，定型后不可改写，更正只走冲正",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "EVENT_UNKNOWN_TYPE",
+        "EVENT_IMMUTABLE",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "submit_event": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 拟稿车道：agent 产出的事件，落为 pending，未过确认门不算事实（不进对象投影、不过账）；同 stable_id 幂等",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "EVENT_UNKNOWN_TYPE",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "decide_event": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 确认门：把 pending 的拟稿事件置 accepted 或 rejected（唯一改变事件状态的人工入口）；ingest 车道事件不需要确认",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "NOT_FOUND",
+        "EVENT_STATE",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "query_events": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 查询事件并返回完整性声明（declared_total/returned/truncated/watermark）；truncated 为真时不得把结果当成全部",
+      "error_codes": [
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "query_object_balance": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 数量面余额（含单位/维度/水位）+ 重算对照；drift 为真表示物化值与事件重算不一致，以事件为准。账本面不提供数量查询",
+      "error_codes": [
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "project_event": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 把已接受事件投影到对象数量面；同 (事件, 对象, 维度) 幂等不叠加。余额是投影产物，不可直写；未过确认门的事件不算事实，不得投影",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "NOT_FOUND",
+        "EVENT_STATE",
+        "OBJECT_CONFLICT",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "submit_posting_rule": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "behavior": "write · 提交过账规则草稿（版本化，不参与过账）；科目必须落在机器车道白名单内，且必须同时含借贷两侧",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "EVENT_UNKNOWN_TYPE",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "approve_posting_rule": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 审批上线过账规则：退役旧 active 版本，本版本生效；升版不重写历史分录",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "NOT_FOUND",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "list_posting_rules": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 列过账规则各版本与状态（draft/active/retired）",
+      "error_codes": [
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "post_event": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 按生效规则把已接受事件过一次账；同一事件只过一次。缺规则时抛 POSTING_RULE_MISSING 并把事件挂入待补清单，账本余额不变（不猜科目）",
+      "error_codes": [
+        "TENANT_DENIED",
+        "NOT_FOUND",
+        "EVENT_STATE",
+        "POSTING_RULE_MISSING",
+        "UNBALANCED",
+        "FX_UNSOURCED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "list_posting_gaps": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 缺规则待补清单：哪些事件在等哪条规则（未解除的缺口）",
+      "error_codes": [
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
     }
   },
   "tool_groups": [
@@ -375,6 +528,38 @@
         "list_credit_reservations"
       ],
       "description": "信用额度：available = limit − 1300 应收余额（分录确定性重算）− active 占用；占用为备忘性质不写复式分录；额度不足 CREDIT_EXCEEDED 带明细。"
+    },
+    {
+      "group": "event",
+      "level": "commercial",
+      "tools": [
+        "ingest_event",
+        "submit_event",
+        "decide_event",
+        "query_events"
+      ],
+      "description": "业务事件层：只追加事实，分两条车道——ingest（外部原始事实，写入即是事实）与 draft（agent 拟稿，未过确认门不算事实）。定型按事件自身周期（日/月/年 + 修订窗）推导，定型后不可改写、更正只走冲正；定型前修订留旧值/来源/时点。读取一律带完整性声明。"
+    },
+    {
+      "group": "object",
+      "level": "commercial",
+      "tools": [
+        "query_object_balance",
+        "project_event"
+      ],
+      "description": "数量面（对象投影）：库存/在途/占用等余额由事件确定性重算，带水位 as_of_event_id；余额是投影产物不可直写，同维度单位冲突（kg 与 pcs）拒写而非静默相加。数量只在此面，账本面只记金额。"
+    },
+    {
+      "group": "posting",
+      "level": "commercial",
+      "tools": [
+        "submit_posting_rule",
+        "approve_posting_rule",
+        "list_posting_rules",
+        "post_event",
+        "list_posting_gaps"
+      ],
+      "description": "过账层：事件经版本化规则确定性映射为复式分录；规则须审批上线、同事件类型只允许一条 active、升版不重写历史分录。缺规则时不猜科目——事件挂入待补清单、账本余额不变。规则科目受机器车道白名单约束。"
     }
   ],
   "error_codes": {
@@ -415,10 +600,10 @@
   "naming_convention": {
     "order": "verb_noun",
     "applies_to": "all_tools",
-    "note": "21 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get/approve/bill/reverse/simulate/reserve/release + 名词）；无历史遗留名词序工具需兼容。"
+    "note": "32 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get/approve/bill/reverse/simulate/reserve/release/ingest/decide/project/post + 名词）；无历史遗留名词序工具需兼容。"
   },
   "registry": {
-    "expected_tool_count": 21
+    "expected_tool_count": 32
   },
   "output_structure": {
     "declared": [
@@ -427,7 +612,11 @@
       "get_recon_report",
       "list_billing_rules",
       "list_fees",
-      "list_credit_reservations"
+      "list_credit_reservations",
+      "query_events",
+      "query_object_balance",
+      "list_posting_rules",
+      "list_posting_gaps"
     ],
     "undeclared": [
       "submit_proposal",
@@ -444,7 +633,14 @@
       "reserve_credit",
       "release_credit",
       "query_credit",
-      "bill_period_snapshot"
+      "bill_period_snapshot",
+      "ingest_event",
+      "submit_event",
+      "decide_event",
+      "project_event",
+      "submit_posting_rule",
+      "approve_posting_rule",
+      "post_event"
     ],
     "tool_fields": {
       "list_proposals": [
@@ -484,9 +680,32 @@
         "reservations[]",
         "rows_returned",
         "ok"
+      ],
+      "query_events": [
+        "data[]",
+        "completeness{declared_total,returned,truncated,watermark,state}",
+        "rows_returned",
+        "ok"
+      ],
+      "query_object_balance": [
+        "data[]",
+        "completeness{declared_total,returned,truncated,watermark,state}",
+        "rows_returned",
+        "ok"
+      ],
+      "list_posting_rules": [
+        "data[]",
+        "rows_returned",
+        "ok"
+      ],
+      "list_posting_gaps": [
+        "data[]",
+        "completeness{declared_total,returned,truncated,state}",
+        "rows_returned",
+        "ok"
       ]
     },
-    "notes": "分页用键集游标（非 OFFSET）；统一体积上限，超限返回 truncated 标记 + 原始规模 + 续读游标（mcp-result-contract）；每次响应含 rows_returned 计量戳（流式/写成功不可计行数时落 0）。其余 15 工具显式登记为 undeclared，杜绝『既未声明也未登记』的静默空缺。"
+    "notes": "分页用键集游标（非 OFFSET）；统一体积上限，超限返回 truncated 标记 + 原始规模 + 续读游标（mcp-result-contract）；每次响应含 rows_returned 计量戳（流式/写成功不可计行数时落 0）。事件/数量面/待补清单的读取额外带 completeness 块（declared_total/returned/truncated/watermark/state）——读取必须自证完整性，截断不得被当成全部。其余工具显式登记为 undeclared，杜绝『既未声明也未登记』的静默空缺。"
   },
   "notes": {
     "compliance_boundary": "二清红线：资金归集/代收代付/分账平台只做对账与核对指令层，资金走客户自选持牌通道；开票/税务申报不自研（挂账），账内可记录发票类事件参与对账、票据本体由客户既有合规渠道处理。信用占用为备忘性质，不执行资金放款/扣款。",

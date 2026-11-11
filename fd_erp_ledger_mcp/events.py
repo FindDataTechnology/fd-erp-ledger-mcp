@@ -265,7 +265,18 @@ def pending_projection_events(conn: Any, *, tenant_id: str, after_event_id: int 
 def project_object_event(conn: Any, *, tenant_id: str, event_id: int, object_type: str,
                          object_key: str, quantity_delta: Any, unit: str,
                          dimension: dict[str, Any] | None = None) -> dict[str, Any]:
-    """把一条事件投影到对象数量面。幂等：同 (事件, 对象, 维度) 不产生第二次增量。"""
+    """把一条已接受事件投影到对象数量面。幂等：同 (事件, 对象, 维度) 不产生第二次增量。
+
+    只有 accepted 的事件是事实；pending 的拟稿事件 MUST NOT 参与任何派生投影。
+    """
+    event = fetch_one(conn, "SELECT status FROM business_events WHERE id=%s AND tenant_id=%s",
+                      (event_id, tenant_id))
+    if event is None:
+        raise ErpError("NOT_FOUND", f"事件不存在：{event_id}")
+    if event["status"] != "accepted":
+        raise ErpError("EVENT_STATE",
+                       f"事件 {event_id} 状态为 {event['status']}，只有 accepted 的事实可投影",
+                       detail={"event_id": event_id, "status": event["status"]})
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute("SELECT erp_project_object_event(%s,%s,%s,%s::jsonb,%s,%s) AS qty",

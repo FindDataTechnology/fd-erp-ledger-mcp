@@ -1,6 +1,6 @@
-"""21 个 MCP 工具（erp-ledger-kernel 工具面 / 任务 2.1-2.4 + 计费 1.x + 信用 4.2）。
+"""32 个 MCP 工具（账本面 2.1-2.4 + 计费 1.x + 信用 4.2 + 事件/数量/过账 establish-erp-event-kernel 5.1）。
 
-写路径只出 proposal，无任何直写落账工具；确认门是唯一落账入口。
+写路径只出 proposal 或拟稿事件，无任何直写落账工具；确认门是唯一落账入口。
 全部工具经 safe_tool 统一错误语义 + rows_returned 计量戳。
 """
 from __future__ import annotations
@@ -11,11 +11,13 @@ from fastmcp import FastMCP
 
 from .annotations import annotations_for
 from .config import Settings
-from .db import connection
+from .db import connection, fetch_all
 from .errors import ErpError
 from . import billing as _billing
 from . import credit as _credit
+from . import events as _events
 from . import ledger as _ledger
+from . import posting as _posting
 from .proposals import (confirm_proposal as _confirm, list_proposals as _list,
                         reject_proposal as _reject, submit_proposal as _submit)
 from .recon.engine import enqueue as _enqueue, get_report as _get_report
@@ -387,3 +389,206 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             # 覆盖成 0 —— 而 rows_returned 是"按行计费唯一依据"（result.py:4）。
             # 2026-11-09 生产实测抓到的：本工具返回 2 行却报 rows_returned=0。
             return paginate(rows, offset=0, limit=0)
+
+    # =========================================================================
+    # 事件层 / 数量面 / 过账层（change: establish-erp-event-kernel 5.1）
+    # 三组共用一条纪律：读取带完整性声明、写入幂等、缺规则不猜科目。
+    # =========================================================================
+
+    # ---- 22. ingest_event：外部原始事实，写入即是事实 ----
+    @mcp.tool(annotations=annotations_for("ingest_event"))
+    @safe_tool
+    def ingest_event(
+        event_type: str,
+        stable_id: str,
+        occurred_at: str,
+        payload: dict[str, Any],
+        source_ref: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """写入来自外部系统的原始事实（导入车道）。
+
+        写入即为事实（accepted），参与数量投影与过账；同 (租户, 车道, stable_id)
+        幂等，重复提交返回首次结果。事件只追加：定型后不可改写，更正须走冲正。
+
+        occurred_at 是**事实发生时点**（不是写入时点），ISO-8601 字符串。
+        载荷字段确实未知时写 "__unknown__"，不要写空串——空串会被读成"没有"。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _events.append_event(
+                conn, settings=settings, tenant_id=tenant, event_type=event_type,
+                stable_id=stable_id, occurred_at=occurred_at, payload=payload,
+                lane="ingest", source_ref=source_ref, actor="ingest-lane")
+
+    # ---- 23. submit_event：agent 拟稿，未确认不算事实 ----
+    @mcp.tool(annotations=annotations_for("submit_event"))
+    @safe_tool
+    def submit_event(
+        event_type: str,
+        stable_id: str,
+        occurred_at: str,
+        payload: dict[str, Any],
+        source_ref: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """提交拟稿事件（拟稿车道）。落为 pending，不参与投影、不过账，直到确认。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _events.append_event(
+                conn, settings=settings, tenant_id=tenant, event_type=event_type,
+                stable_id=stable_id, occurred_at=occurred_at, payload=payload,
+                lane="draft", source_ref=source_ref, actor="agent")
+
+    # ---- 24. decide_event：确认门 ----
+    @mcp.tool(annotations=annotations_for("decide_event"))
+    @safe_tool
+    def decide_event(
+        stable_id: str,
+        decision: str,
+        note: str = "",
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """对拟稿事件作出确认或拒绝（唯一改变事件状态的人工入口）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _events.decide_event(
+                conn, tenant_id=tenant, stable_id=stable_id, lane="draft",
+                decision=decision, actor="human", note=note)
+
+    # ---- 25. query_events：带完整性声明 ----
+    @mcp.tool(annotations=annotations_for("query_events"))
+    @safe_tool
+    def query_events(
+        event_type: str | None = None,
+        lane: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        after_event_id: int = 0,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """查询事件流；返回 completeness（truncated 为真时不得当成全部）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            out = _events.query_events(conn, tenant_id=tenant, event_type=event_type,
+                                       lane=lane, status=status, limit=limit,
+                                       after_event_id=after_event_id)
+            return {"data": out["items"], "completeness": out["completeness"]}
+
+    # ---- 26. query_object_balance：数量面 ----
+    @mcp.tool(annotations=annotations_for("query_object_balance"))
+    @safe_tool
+    def query_object_balance(
+        object_type: str,
+        object_key: str,
+        dimension: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """读数量面余额（含单位/维度/水位）+ 重算对照。
+
+        drift 为真表示物化值与事件重算不一致——以事件为准。账本面不提供数量查询：
+        金额在 ledger 组，数量在本组，两不相混。
+        """
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            out = _events.query_object_balance(
+                conn, tenant_id=tenant, object_type=object_type,
+                object_key=object_key, dimension=dimension)
+            return {"data": [out], "completeness": out["completeness"]}
+
+    # ---- 27. project_event：事件 → 对象数量面 ----
+    @mcp.tool(annotations=annotations_for("project_event"))
+    @safe_tool
+    def project_event(
+        event_id: int,
+        object_type: str,
+        object_key: str,
+        quantity_delta: float,
+        unit: str,
+        dimension: dict[str, Any] | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """把已接受事件投影到数量面。同 (事件, 对象, 维度) 幂等不叠加。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            out = _events.project_object_event(
+                conn, tenant_id=tenant, event_id=event_id, object_type=object_type,
+                object_key=object_key, quantity_delta=quantity_delta, unit=unit,
+                dimension=dimension)
+            return {"data": [out], "completeness": out["completeness"]}
+
+    # ---- 28. submit_posting_rule：规则草稿 ----
+    @mcp.tool(annotations=annotations_for("submit_posting_rule"))
+    @safe_tool
+    def submit_posting_rule(
+        event_type: str,
+        lines: list[dict[str, Any]],
+        source_ref: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """提交过账规则草稿（版本化，不参与过账直到审批）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _posting.submit_posting_rule(
+                conn, tenant_id=tenant, event_type=event_type,
+                rule={"lines": lines}, source_ref=source_ref, actor="agent")
+
+    # ---- 29. approve_posting_rule：审批上线 ----
+    @mcp.tool(annotations=annotations_for("approve_posting_rule"))
+    @safe_tool
+    def approve_posting_rule(
+        event_type: str,
+        version: int,
+        approved_by: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """审批上线过账规则（退役旧 active 版本；升版不重写历史分录）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _posting.approve_posting_rule(
+                conn, tenant_id=tenant, event_type=event_type, version=version,
+                approved_by=approved_by)
+
+    # ---- 30. list_posting_rules ----
+    @mcp.tool(annotations=annotations_for("list_posting_rules"))
+    @safe_tool
+    def list_posting_rules(
+        event_type: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """列出过账规则各版本与状态（draft/active/retired）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            sql = ("SELECT event_type, version, status, approved_by, approved_at "
+                   "FROM posting_rules WHERE tenant_id=%s")
+            params: list[Any] = [tenant]
+            if event_type:
+                sql += " AND event_type=%s"
+                params.append(event_type)
+            sql += " ORDER BY event_type, version"
+            return paginate(fetch_all(conn, sql, tuple(params)))
+
+    # ---- 31. post_event：事件 → 分录 ----
+    @mcp.tool(annotations=annotations_for("post_event"))
+    @safe_tool
+    def post_event(
+        event_id: int,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """按生效规则把已接受事件过一次账；缺规则抛 POSTING_RULE_MISSING 并挂待补。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _posting.post_event(conn, settings=settings, tenant_id=tenant,
+                                      event_id=event_id)
+
+    # ---- 32. list_posting_gaps：待补清单 ----
+    @mcp.tool(annotations=annotations_for("list_posting_gaps"))
+    @safe_tool
+    def list_posting_gaps(
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """列出缺规则待补清单：哪些事件在等哪条规则。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            out = _posting.list_posting_gaps(conn, tenant_id=tenant)
+            return {"data": out["items"], "completeness": out["completeness"]}

@@ -1,5 +1,5 @@
-"""工具面（2.1/2.5 + add-supply-chain-vertical 1.x/4.2 + close-orphan-credit-reservations
-+ optimize-erp-solution 5.3）：21 工具全暴露、行为属性齐全、错误语义对齐。"""
+"""工具面（账本 + 计费 + 信用 + 事件/数量/过账）：32 工具全暴露、行为属性齐全、
+错误语义对齐。manifest ↔ 运行时注解双向一致由本文件钉住（selfcheck 是离线镜像）。"""
 from __future__ import annotations
 
 import json
@@ -17,8 +17,13 @@ EXPECTED_TOOLS = {
     "bill_period_snapshot",
     # 信用（add-supply-chain-vertical 任务 4.2 + close-orphan-credit-reservations）
     "reserve_credit", "release_credit", "query_credit", "list_credit_reservations",
+    # 事件层 / 数量面 / 过账层（establish-erp-event-kernel 5.1）
+    "ingest_event", "submit_event", "decide_event", "query_events",
+    "query_object_balance", "project_event",
+    "submit_posting_rule", "approve_posting_rule", "list_posting_rules",
+    "post_event", "list_posting_gaps",
 }
-EXPECTED_TOOL_COUNT = 21
+EXPECTED_TOOL_COUNT = 32
 
 
 def test_runtime_annotations_cover_exact_set():
@@ -72,3 +77,23 @@ def test_error_codes_declared_in_manifest():
         for code in codes:
             from fd_erp_ledger_mcp.error_codes import CATALOG
             assert code in CATALOG, f"{name} 声明了未登记错误码 {code}"
+
+
+def test_runtime_registers_exactly_the_declared_tools():
+    """实注册判据（不是离线镜像）：搭一个 FastMCP 实例，数它真实暴露的工具。
+
+    selfcheck_surface.py 用的是常量镜像，改动时两边都要改；本用例读的是
+    `create_server()` 的真实注册结果，能抓住「镜像改了但 tools.py 没注册」
+    这种最容易假绿的形态。
+    """
+    import asyncio
+
+    from fd_erp_ledger_mcp.config import Settings
+    from fd_erp_ledger_mcp.server import create_server
+
+    settings = Settings(database_url=None, tenant_id="acme", base_currency="CNY")
+    mcp = create_server(settings)
+    tools_obj = asyncio.run(mcp.list_tools())
+    listed = {t.name for t in tools_obj}
+    assert listed == EXPECTED_TOOLS, sorted(listed ^ EXPECTED_TOOLS)
+    assert len(listed) == EXPECTED_TOOL_COUNT

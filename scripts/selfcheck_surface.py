@@ -41,7 +41,7 @@ SERVER_NAME = "fd-erp-ledger-mcp"
 
 # ---- canonical 真值（offline 镜像；改动请先改 /tmp/erp-kernel-contract.md）----
 
-# 21 EXACT commercial 工具名（controlling contract 8 基础 + 计费 9 + 信用 4）
+# 32 EXACT commercial 工具名（账本 8 + 计费 9 + 信用 4 + 事件 4 + 数量面 2 + 过账 5）
 CANONICAL_TOOLS = frozenset({
     "submit_proposal",
     "list_proposals",
@@ -68,8 +68,22 @@ CANONICAL_TOOLS = frozenset({
     "query_credit",
     # 占用明细（close-orphan-credit-reservations）——只读，孤儿报表的读原语
     "list_credit_reservations",
+    # 事件层（establish-erp-event-kernel）
+    "ingest_event",
+    "submit_event",
+    "decide_event",
+    "query_events",
+    # 数量面（对象投影）
+    "query_object_balance",
+    "project_event",
+    # 过账层
+    "submit_posting_rule",
+    "approve_posting_rule",
+    "list_posting_rules",
+    "post_event",
+    "list_posting_gaps",
 })
-EXPECTED_TOOL_COUNT = 21
+EXPECTED_TOOL_COUNT = 32
 
 # 行为属性（mcp-surface-contract「只读/破坏性/幂等」+ openWorld 协议层第四项）
 REQUIRED_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
@@ -97,6 +111,12 @@ CANONICAL_ERROR_CODES = frozenset({
     "FEE_COVERAGE_MISSING",
     # 信用域（add-supply-chain-vertical 任务 4.2）
     "CREDIT_EXCEEDED",
+    # 事件层（establish-erp-event-kernel）
+    "EVENT_IMMUTABLE",
+    "EVENT_UNKNOWN_TYPE",
+    "EVENT_STATE",
+    "OBJECT_CONFLICT",
+    "POSTING_RULE_MISSING",
     "INTERNAL",
 })
 # 至少四类可区分语义（error_codes.py 的 REQUIRED_CLASSES）
@@ -299,7 +319,7 @@ def main() -> int:
     # ---- 打印摘要 ----
     print(f"server        : {SERVER_NAME}")
     print(f"manifest      : {MANIFEST}")
-    print(f"canonical     : {len(CANONICAL_TOOLS)} 工具（controlling contract 8 基础 + 计费 9 + 信用 4）")
+    print(f"canonical     : {len(CANONICAL_TOOLS)} 工具（账本 8 + 计费 9 + 信用 4 + 事件 4 + 数量面 2 + 过账 5）")
     if ctx.get("manifest"):
         m = ctx["manifest"]
         print(f"声明            : annotations={len(ctx['ann'])} / "
