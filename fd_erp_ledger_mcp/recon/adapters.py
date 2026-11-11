@@ -186,8 +186,129 @@ class JsonApiAdapter(SourceAdapter):
         return [dict(r) if isinstance(r, dict) else {"stable_id": str(r)} for r in items]
 
 
+class KbEventsAdapter(SourceAdapter):
+    """内核内部源①：业务事件流（change: establish-erp-event-kernel 3.5）。
+
+    为什么把对账指向内部：事件层与账本层是两套真相（事实/数量 vs 金额/分录），
+    它俩之间唯一的自证手段就是逐笔对齐；引擎、长任务、仅失败条目重试全部复用，
+    不必另造一套巡检。
+
+    只读。amount 取 `amount_from` 声明的载荷字段；缺该字段的事件按 0 计入并打
+    `_amount_missing` 标记——不静默丢弃：它要么没落账（missing），要么用别的字段
+    落了账（amount_mismatch），两种都该被看见。
+    """
+
+    name = "events"
+
+    def __init__(self, conn: Any, side: str = "left", *,
+                 event_types: list[str] | None = None,
+                 amount_from: str = "payload.total_amount",
+                 include_reversed: bool = True):
+        self._conn = conn
+        self._side = side
+        self._event_types = list(event_types or [])
+        self._amount_from = amount_from
+        self._include_reversed = include_reversed
+
+    def side(self) -> str:
+        return self._side
+
+    def iter_raw(self) -> list[dict[str, Any]]:
+        sql = ("SELECT tenant_id, stable_id, event_type, status, payload, occurred_at "
+               "FROM business_events WHERE status = ANY(%s)")
+        params: list[Any] = [
+            ["accepted", "reversed"] if self._include_reversed else ["accepted"]]
+        if self._event_types:
+            sql += " AND event_type = ANY(%s)"
+            params.append(self._event_types)
+        sql += " ORDER BY id"
+        with self._conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+
+        key = (self._amount_from[len("payload."):]
+               if self._amount_from.startswith("payload.") else self._amount_from)
+        out: list[dict[str, Any]] = []
+        for tenant_id, stable_id, event_type, status, payload, occurred_at in rows:
+            body = payload or {}
+            amount = body.get(key)
+            missing = amount is None
+            out.append({
+                "stable_id": stable_id,
+                # 金额一律按字符串发：Decimal 进 raw 会让报告 JSON 序列化炸掉
+                "amount": "0" if missing else str(amount),
+                "currency": body.get("currency") or "CNY",
+                "status": _EVENT_STATUS_MAP.get(status, status),
+                "occurred_at": str(occurred_at) if occurred_at else None,
+                "source_ref": f"event:{event_type}:{stable_id}",
+                "_amount_missing": missing,
+                "_amount_field": key,
+                "_event_status": status,
+                "_tenant_id": tenant_id,
+            })
+        return out
+
+
+class KbPostingAdapter(SourceAdapter):
+    """内核内部源②：由事件派生的分录（change: establish-erp-event-kernel 3.5）。
+
+    键与事件源对齐：用 `posting_links.event_id -> business_events.stable_id`，
+    而不是分录自己的 `{stable_id}#post` —— 两源必须同键才能比。
+    amount 为该事件对应分录的借方合计（借贷必平，取一侧即可）。
+    """
+
+    name = "posting"
+
+    def __init__(self, conn: Any, side: str = "right", *,
+                 event_types: list[str] | None = None):
+        self._conn = conn
+        self._side = side
+        self._event_types = list(event_types or [])
+
+    def side(self) -> str:
+        return self._side
+
+    def iter_raw(self) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT e.stable_id, e.status, pl.txn_id, "
+            "       COALESCE(SUM(CASE WHEN je.direction='debit' "
+            "                         THEN je.amount_base ELSE 0 END), 0) AS amt, "
+            "       COUNT(je.id) AS lines "
+            "  FROM posting_links pl "
+            "  JOIN business_events e ON e.id = pl.event_id "
+            "  LEFT JOIN journal_entries je "
+            "         ON je.tenant_id = pl.tenant_id AND je.txn_id = pl.txn_id "
+        )
+        params: list[Any] = []
+        if self._event_types:
+            sql += " WHERE e.event_type = ANY(%s)"
+            params.append(self._event_types)
+        sql += (" GROUP BY e.stable_id, e.status, pl.txn_id ORDER BY e.stable_id")
+        with self._conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        return [{
+            "stable_id": stable_id,
+            "amount": str(amt),
+            "currency": "CNY",
+            "status": "reversed" if status == "reversed" else "posted",
+            "occurred_at": None,
+            "source_ref": f"posting:{txn_id}",
+            "_txn_id": txn_id,
+            "_lines": lines,
+        } for stable_id, status, txn_id, amt, lines in rows]
+
+
+#: 事件状态 → 分录侧可比状态。pending 不进两源（它不是事实）。
+_EVENT_STATUS_MAP = {"accepted": "posted", "reversed": "reversed"}
+
+
 def build_adapter(spec: dict[str, Any], side: str) -> SourceAdapter:
-    """从声明构造适配器；平台连接器归模板 change，此处仅通用三型。"""
+    """从声明构造适配器：通用三型 + 内核内部两型。
+
+    内部两型（events / posting）不接受外部声明的连接，必须由引擎注入 `_conn`——
+    否则等于让调用方指定"对哪本账对账"，那是租户越界。
+    """
     if not isinstance(spec, dict):
         raise ErpError("INVALID_ARGUMENT", f"{side} source 须为对象")
     kind = str(spec.get("type") or "inline")
@@ -200,6 +321,18 @@ def build_adapter(spec: dict[str, Any], side: str) -> SourceAdapter:
             return JsonApiAdapter(str(spec.get("url") or ""), side,
                                   spec.get("credential_name"),
                                   str(spec.get("records_key") or "records"))
+        if kind in ("events", "posting"):
+            conn = spec.get("_conn")
+            if conn is None:
+                raise ErpError("INVALID_ARGUMENT",
+                               f"{kind} 源需要内核连接（由引擎注入）；不接受外部声明连接")
+            types = spec.get("event_types") or []
+            if kind == "events":
+                return KbEventsAdapter(
+                    conn, side, event_types=types,
+                    amount_from=str(spec.get("amount_from") or "payload.total_amount"),
+                    include_reversed=bool(spec.get("include_reversed", True)))
+            return KbPostingAdapter(conn, side, event_types=types)
     except ErpError:
         raise
     except Exception as exc:

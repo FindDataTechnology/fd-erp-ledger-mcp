@@ -201,3 +201,64 @@ def test_pending_event_cannot_be_posted(settings):
         with pytest.raises(ErpError) as ei:
             posting.post_event(conn, settings=settings, tenant_id=TENANT, event_id=ev["id"])
         assert ei.value.code == "EVENT_STATE"
+
+
+# ---------------- 3.5 事件流 vs 分录流对账（内部两源） ----------------
+
+def _reconcile_events(settings, tenant=TENANT, event_types=None):
+    from fd_erp_ledger_mcp.recon.engine import enqueue, wait_for_task
+    types = event_types or ["goods_received"]
+    job = enqueue(settings, tenant,
+                  {"type": "events", "event_types": types, "amount_from": "payload.cost"},
+                  {"type": "posting", "event_types": types},
+                  None)
+    return wait_for_task(settings, tenant, job["task_id"], timeout=30.0)
+
+
+def test_event_vs_posting_recon_clean_when_consistent(settings):
+    """事件与分录一致时差异清单为空，且两源都被读到（不是假绿的空对空）。"""
+    with connection(settings) as conn:
+        _activate(conn)
+        ev = _receive(conn, settings, cost=500)
+        posting.post_event(conn, settings=settings, tenant_id=TENANT, event_id=ev["id"])
+    rep = _reconcile_events(settings)
+    assert rep["status"] == "done"
+    result = rep["result"]
+    assert result["diffs"] == []
+    assert result["summary"]["left_unique"] == 1
+    assert result["summary"]["right_unique"] == 1
+
+
+def test_event_vs_posting_recon_flags_event_without_entry(settings):
+    """有事件无分录 → missing_in_right，且带双侧引用（右侧为空也要说明）。"""
+    with connection(settings) as conn:
+        _receive(conn, settings, cost=500)  # 不 post
+    rep = _reconcile_events(settings)
+    diffs = rep["result"]["diffs"]
+    assert [d["diff_type"] for d in diffs] == ["missing_in_right"]
+    assert diffs[0]["left_ref"].startswith("event:goods_received:")
+
+
+def test_event_vs_posting_recon_flags_amount_mismatch(settings):
+    """事件声明 500、规则落 400 → amount_mismatch 暴露，不被静默掩盖。"""
+    with connection(settings) as conn:
+        _activate(conn, rule={"lines": [
+            {"account_code": "1405", "direction": "debit", "amount_from": "400"},
+            {"account_code": "2202", "direction": "credit", "amount_from": "400"},
+        ]})
+        ev = _receive(conn, settings, cost=500)
+        posting.post_event(conn, settings=settings, tenant_id=TENANT, event_id=ev["id"])
+    rep = _reconcile_events(settings)
+    diffs = rep["result"]["diffs"]
+    assert [d["diff_type"] for d in diffs] == ["amount_mismatch"]
+    assert diffs[0]["left_ref"] and diffs[0]["right_ref"]
+
+
+def test_internal_source_rejects_foreign_connection(settings):
+    """内部两源不接受外部声明的连接：否则调用方可指定去对哪本账。"""
+    from fd_erp_ledger_mcp.errors import ErpError
+    from fd_erp_ledger_mcp.recon.adapters import build_adapter
+    with pytest.raises(ErpError) as ei:
+        build_adapter({"type": "events", "records": []}, "left")
+    assert ei.value.code == "INVALID_ARGUMENT"
+    assert "引擎注入" in ei.value.message

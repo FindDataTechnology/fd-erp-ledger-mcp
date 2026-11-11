@@ -202,10 +202,16 @@ def _run_worker(settings: Settings, task_id: str, tenant_id: str,
                 left_spec: dict, right_spec: dict, retry_task_id: str | None) -> None:
     try:
         _set_progress(settings, task_id, status="running", stage="reading_sources")
-        left_adapter = build_adapter(left_spec, "left")
-        right_adapter = build_adapter(right_spec, "right")
-        left_records, left_failures = left_adapter.read_tolerant()
-        right_records, right_failures = right_adapter.read_tolerant()
+        # 内核内部两型（events / posting）需要一条读连接；连接由引擎注入，
+        # 不接受请求里自带 —— 否则调用方可以指定去对哪本账。
+        conn_for_sources = get_pool(settings).getconn()
+        try:
+            left_adapter = build_adapter({**left_spec, "_conn": conn_for_sources}, "left")
+            right_adapter = build_adapter({**right_spec, "_conn": conn_for_sources}, "right")
+            left_records, left_failures = left_adapter.read_tolerant()
+            right_records, right_failures = right_adapter.read_tolerant()
+        finally:
+            get_pool(settings).putconn(conn_for_sources)
 
         # 仅失败条目重试：从上一任务取失败 item_key，本轮只重放这些条目。
         retry_keys: set[str] | None = None
