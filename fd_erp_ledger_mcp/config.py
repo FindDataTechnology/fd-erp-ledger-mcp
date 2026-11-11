@@ -6,7 +6,7 @@ BYOK 纪律（erp-board / crm-board 契约）：外部系统凭证只经环境�
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -21,7 +21,9 @@ class Settings:
     内核另加「租户列 + 查询闸」做纵深防御（本 change design.md 决策，见 README）。
     """
 
-    database_url: str | None = None
+    #: DSN 含口令：repr=False 让异常栈 / pprint / REPL 也不出明文。
+    #: 日志层另有 observability 的键名与形状打码，但那只覆盖走日志的路径。
+    database_url: str | None = field(default=None, repr=False)
     tenant_id: str = "default"
     base_currency: str = "CNY"
     #: 占用失效时点的上界（天）。受理方声明的 expires_at 不得超过它，否则视为
