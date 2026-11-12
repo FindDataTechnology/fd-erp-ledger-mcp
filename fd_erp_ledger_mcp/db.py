@@ -38,7 +38,10 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #:       封闭的 account_type 无 contra-asset，按 asset 登记靠 note 与贷方方向表达抵减）。
 #:       纯追加 + 幂等（ON CONFLICT (code) DO NOTHING），无数据迁移；
 #:       既有租户须重跑内核 CLI seed-accounts 才把两科目种进各自 accounts。
-REQUIRED_SCHEMA_VERSION = "0012_fixed_assets_accounts"
+#: 0013：分析维度——proposals / journal_entries 各增 dimensions JSONB（默认空集）+ GIN 索引；
+#:       键是封闭集（department/project/channel/cost_center/entity），值是自由字符串。
+#:       纯追加、不回填历史（未标注就是空集，不猜归属）；既有账务语义（借贷必平/幂等/余额重算）不变。
+REQUIRED_SCHEMA_VERSION = "0013_analytical_dimensions"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}

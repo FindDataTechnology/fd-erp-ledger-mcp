@@ -42,9 +42,14 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         lane_title: str | None = None,
         lane_target: str | None = None,
         tenant_id: str | None = None,
+        dimensions: dict[str, str] | None = None,
         submitted_by: str = "agent",
     ) -> dict[str, Any]:
-        """提交拟落账事件（proposal），不直接改变账本状态；同 stable_id 重复提交返回首次结果。"""
+        """提交拟落账事件（proposal），不直接改变账本状态；同 stable_id 重复提交返回首次结果。
+
+        `dimensions` 可选：键为封闭集（department/project/channel/cost_center/entity），
+        值为自由字符串；确认后逐行带进分录。不传即「未标注维度」，不补默认值。
+        """
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)
             return _submit(conn, settings=settings, tenant_id=tenant,
@@ -52,6 +57,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                            kind=kind, reversal_of=reversal_of,
                            lane_fleet=lane_fleet, lane_post=lane_post,
                            lane_title=lane_title, lane_target=lane_target,
+                           dimensions=dimensions,
                            submitted_by=submitted_by)
 
     # ---- 2. list_proposals ----
@@ -122,13 +128,18 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         account_code: str | None = None,
         txn_id: str | None = None,
         tenant_id: str | None = None,
+        dimensions: dict[str, str] | None = None,
         offset: int = 0,
         limit: int = 100,
     ) -> dict[str, Any]:
-        """分页查询已落账分录（含原币/折算、出处、来源引用、时间戳、冲正关联）。"""
+        """分页查询已落账分录（含原币/折算、出处、来源引用、时间戳、冲正关联、维度）。
+
+        `dimensions` 过滤为「与」语义：给出多个键即要求全部命中；只影响读取。
+        """
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)
-            rows = _ledger.query_entries(conn, tenant, account_code=account_code, txn_id=txn_id)
+            rows = _ledger.query_entries(conn, tenant, account_code=account_code,
+                                         txn_id=txn_id, dimensions=dimensions)
             return paginate(rows, offset=offset, limit=limit)
 
     # ---- 7. run_reconciliation：长任务，立即返回 task_id ----

@@ -14,6 +14,7 @@ from typing import Any
 from .config import Settings
 from .db import fetch_all, fetch_one
 from .errors import ErpError
+from .dimensions import normalize_dimensions
 from .ledger import build_reversal_lines, post_lines, _normalize_lines
 from .tenancy import audit
 from . import observability as obs
@@ -34,6 +35,7 @@ def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
                     kind: str = "journal", reversal_of: str | None = None,
                     lane_fleet: str | None = None, lane_post: str | None = None,
                     lane_title: str | None = None, lane_target: str | None = None,
+                    dimensions: Any = None,
                     submitted_by: str = "agent") -> dict[str, Any]:
     if not stable_id or not str(stable_id).strip():
         raise ErpError("INVALID_ARGUMENT", "stable_id 不能为空")
@@ -41,6 +43,8 @@ def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
         raise ErpError("INVALID_ARGUMENT", "kind 须为 journal 或 reversal")
     if kind == "reversal" and not reversal_of:
         raise ErpError("INVALID_ARGUMENT", "冲正提案须带 reversal_of（原 txn_id）")
+    # 维度先校验、后查幂等：非法维度不该因为「同 stable_id 已存在」被悄悄放过去。
+    dims = normalize_dimensions(dimensions)
 
     # 幂等：已存在同 stable_id 直接返回首次结果，不重复入账、不报错。
     existing = fetch_one(
@@ -75,11 +79,13 @@ def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO proposals(tenant_id, stable_id, kind, payload, status, "
-                "reversal_of, source_ref, lane_fleet, lane_post, lane_title, lane_target) "
-                "VALUES (%s,%s,%s,%s::jsonb,'pending',%s,%s,%s,%s,%s,%s) "
+                "reversal_of, source_ref, lane_fleet, lane_post, lane_title, lane_target, "
+                "dimensions) "
+                "VALUES (%s,%s,%s,%s::jsonb,'pending',%s,%s,%s,%s,%s,%s,%s::jsonb) "
                 "ON CONFLICT (tenant_id, stable_id) DO NOTHING",
                 (tenant_id, stable_id, kind, payload, reversal_of, source_ref,
-                 lane_fleet, lane_post, lane_title, lane_target),
+                 lane_fleet, lane_post, lane_title, lane_target,
+                 json.dumps(dims, ensure_ascii=False)),
             )
     row = fetch_one(
         conn, "SELECT * FROM proposals WHERE tenant_id=%s AND stable_id=%s",
@@ -102,6 +108,7 @@ def _proposal_view(row: dict[str, Any] | None, *, duplicate: bool = False) -> di
         "reversal_of": row["reversal_of"],
         "source_ref": row["source_ref"],
         "created_at": str(row["created_at"]),
+        "dimensions": row.get("dimensions") or {},
         "duplicate": duplicate,
         "idempotent_hit": duplicate,
     }
@@ -110,7 +117,7 @@ def _proposal_view(row: dict[str, Any] | None, *, duplicate: bool = False) -> di
 def list_proposals(conn: Any, tenant_id: str, status: str | None = None) -> list[dict[str, Any]]:
     sql = ("SELECT id, stable_id, kind, status, reversal_of, source_ref, "
            "lane_fleet, lane_post, lane_title, lane_target, created_at, "
-           "decided_at, decided_by, decision_note "
+           "decided_at, decided_by, decision_note, dimensions "
            "FROM proposals WHERE tenant_id=%s ")
     params: list[Any] = [tenant_id]
     if status:
@@ -164,6 +171,7 @@ def confirm_proposal(conn: Any, *, settings: Settings, tenant_id: str,
         source_ref=row["source_ref"], confirmed_by=confirmed_by,
         is_reversal=(row["kind"] == "reversal"),
         reversal_of=row["reversal_of"],
+        dimensions=row.get("dimensions") or {},
     )
     with conn.transaction():
         with conn.cursor() as cur:

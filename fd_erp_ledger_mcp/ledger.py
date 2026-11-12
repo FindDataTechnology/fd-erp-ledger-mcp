@@ -82,7 +82,7 @@ def build_reversal_lines(conn: Any, tenant_id: str, original_txn: str) -> list[d
     rows = fetch_all(
         conn,
         "SELECT account_code, direction, amount, currency, amount_base, "
-        "fx_rate, fx_as_of, fx_source FROM journal_entries "
+        "fx_rate, fx_as_of, fx_source, dimensions FROM journal_entries "
         "WHERE tenant_id=%s AND txn_id=%s ORDER BY line_no",
         (tenant_id, original_txn),
     )
@@ -101,14 +101,31 @@ def build_reversal_lines(conn: Any, tenant_id: str, original_txn: str) -> list[d
             "fx_rate": str(r["fx_rate"]) if r["fx_rate"] is not None else None,
             "fx_as_of": str(r["fx_as_of"]) if r["fx_as_of"] is not None else None,
             "fx_source": r["fx_source"],
+            # 冲正必须落在同一维度：否则红字跑到别的维度，该维度净额虚高、原维度虚低，
+            # 而账本借贷仍然平——这种错最难看出来的就是它（design D3）。
+            "dimensions": r.get("dimensions") or {},
         })
     return lines
+
+
+def _line_dimensions(line: dict[str, Any],
+                     proposal_dimensions: dict[str, str] | None) -> dict[str, str]:
+    """行级维度优先，其次提案级。
+
+    冲正分录由原分录派生、带着原维度（design D3）；普通提案的维度只在提案上，
+    由这里下发给每一行（design D2）。两处都为空即「未标注」。
+    """
+    line_dims = line.get("dimensions")
+    if isinstance(line_dims, dict) and line_dims:
+        return line_dims
+    return proposal_dimensions or {}
 
 
 def post_lines(conn: Any, *, settings: Settings, tenant_id: str, stable_id: str,
                lines: list[dict[str, Any]], source_ref: str | None,
                confirmed_by: str, is_reversal: bool = False,
-               reversal_of: str | None = None) -> dict[str, Any]:
+               reversal_of: str | None = None,
+               dimensions: dict[str, str] | None = None) -> dict[str, Any]:
     """把已确认提案的分录行落账。返回 txn_id 与行数。
 
     借贷必平由 DB 延迟约束触发器在 COMMIT 时判定：不平则整笔回滚、
@@ -129,14 +146,16 @@ def post_lines(conn: Any, *, settings: Settings, tenant_id: str, stable_id: str,
                         "INSERT INTO journal_entries("
                         "tenant_id, txn_id, line_no, account_code, direction, amount, currency, "
                         "amount_base, fx_rate, fx_as_of, fx_source, stable_id, source_ref, "
-                        "is_reversal, reversal_of, provenance) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb) "
+                        "is_reversal, reversal_of, provenance, dimensions) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb) "
                         "ON CONFLICT (tenant_id, stable_id, line_no) DO NOTHING",
                         (tenant_id, txn_id, line["line_no"], line["account_code"],
                          line["direction"], line["amount"], line["currency"],
                          line["amount_base"], line["fx_rate"], line["fx_as_of"],
                          line["fx_source"], stable_id, source_ref,
-                         is_reversal, reversal_of, provenance),
+                         is_reversal, reversal_of, provenance,
+                         json.dumps(_line_dimensions(line, dimensions),
+                                    ensure_ascii=False)),
                     )
     except Exception as exc:
         # 借贷必平是 DEFERRABLE 约束：在事务 COMMIT 时触发，异常从 with 块边界
@@ -171,10 +190,11 @@ def compute_balance(conn: Any, tenant_id: str, account_code: str | None,
 
 
 def query_entries(conn: Any, tenant_id: str, *, account_code: str | None = None,
-                  txn_id: str | None = None) -> list[dict[str, Any]]:
+                  txn_id: str | None = None,
+                  dimensions: dict[str, str] | None = None) -> list[dict[str, Any]]:
     sql = ("SELECT txn_id, line_no, account_code, direction, amount, currency, "
            "amount_base, fx_rate, fx_as_of, fx_source, stable_id, source_ref, "
-           "is_reversal, reversal_of, posted_at, provenance "
+           "is_reversal, reversal_of, posted_at, provenance, dimensions "
            "FROM journal_entries WHERE tenant_id=%s ")
     params: list[Any] = [tenant_id]
     if account_code:
@@ -183,6 +203,10 @@ def query_entries(conn: Any, tenant_id: str, *, account_code: str | None = None,
     if txn_id:
         sql += "AND txn_id=%s "
         params.append(txn_id)
+    if dimensions:
+        # 包含语义：给几个键就是「全部命中」（design D4）。
+        sql += "AND dimensions @> %s::jsonb "
+        params.append(json.dumps(dimensions, ensure_ascii=False))
     sql += "ORDER BY posted_at, txn_id, line_no"
     rows = fetch_all(conn, sql, tuple(params))
     for r in rows:
