@@ -21,11 +21,16 @@ from typing import Any
 
 from .errors import ErpError
 
-#: 维度键封闭集。加键必须走迁移并同步本表与文档。
-DIMENSION_KEYS = ("department", "project", "channel", "cost_center", "entity")
+#: 维度键封闭集。加键是一次受审的代码改动（表结构不动，但这个集合是账本的分析 schema），
+#: 必须同步本表、文档与消费方。
+#:
+#: `customer`：应收/收入的主分析轴——「谁欠我、欠多久」与「谁贡献的收入」都靠它
+#: （change: add-receivable-aging）。
+DIMENSION_KEYS = ("department", "project", "channel", "cost_center", "entity",
+                  "customer")
 
 #: 单条提案的维度键上限（一次落账不该按七八个维度切）。
-MAX_DIMENSION_KEYS = 5
+MAX_DIMENSION_KEYS = 6
 
 #: 维度值长度上限（组织/项目编码，不是备注）。
 MAX_DIMENSION_VALUE = 64

@@ -46,7 +46,11 @@ def _reset_db(request):
                     "recon_task_items, audit, accounts, billing_rules, fee_details, "
                     "billing_fee_items, credit_registry, credit_reservations, "
                     "posting_gaps, posting_links, posting_rules, "
-                    "object_balances, object_events, business_events, event_revisions "
+                    # `objects` 必须在这里：漏了它，上一轮（或同一库上另一个套件）投影出来的
+                    # 对象会留下来，而 `SELECT ... FROM objects` 不带 ORDER BY ——
+                    # 于是「只有一行」的断言按查询顺序时绿时红（11-13 实测一次假红）。
+                    "objects, object_balances, object_events, business_events, "
+                    "event_revisions "
                     "RESTART IDENTITY CASCADE"
                 )
     finally:

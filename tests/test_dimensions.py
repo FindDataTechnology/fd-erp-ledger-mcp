@@ -171,3 +171,13 @@ def test_balance_semantics_unchanged_by_dimensions(settings):
     with connection(settings) as conn:
         rows = compute_balance(conn, settings.tenant_id, "5200", settings=settings)
     assert rows[0]["debit_total"] == "200.000000"
+
+
+def test_customer_is_an_allowed_analysis_axis(settings):
+    """`customer` 是 AR/收入的主分析轴（add-receivable-aging），已进封闭集。"""
+    assert "customer" in DIMENSION_KEYS
+    assert normalize_dimensions({"customer": "C-001"}) == {"customer": "C-001"}
+    out = _submit(settings, "dim-cust-1", dimensions={"customer": "C-001"})
+    assert out["dimensions"] == {"customer": "C-001"}
+    with pytest.raises(ErpError):
+        normalize_dimensions({"client": "C-001"})     # 仍是封闭集，拼写漂移照拒
