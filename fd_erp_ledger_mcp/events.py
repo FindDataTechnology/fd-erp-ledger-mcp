@@ -26,6 +26,11 @@ UNKNOWN = "__unknown__"
 #: 两条车道的初始状态：外部原始事实即可成为事实；agent 拟稿必须等确认门。
 _LANE_INITIAL_STATUS = {"ingest": "accepted", "draft": "pending"}
 
+#: 事件读取统一 JOIN 类型注册表：板块归属（producer）是**类型**的属性，不是事件列。
+#: 单表单注册表（design D1/D2）：类型在注册时确定板块，事件只引用类型名。
+_EVENT_FROM = "business_events e JOIN event_types et ON et.event_type = e.event_type"
+_EVENT_COLS = "e.*, et.producer AS producer"
+
 
 def _jsonb(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
@@ -76,8 +81,15 @@ def append_event(conn: Any, *, settings: Settings, tenant_id: str, event_type: s
                  stable_id: str, occurred_at: Any, payload: dict[str, Any],
                  lane: str = "ingest", source_ref: str | None = None,
                  provenance: dict[str, Any] | None = None,
-                 actor: str = "system") -> dict[str, Any]:
-    """写入一条事件。同 (租户, 车道, stable_id) 幂等：重复提交返回首次结果。"""
+                 actor: str = "system",
+                 producer: str | None = None) -> dict[str, Any]:
+    """写入一条事件。同 (租户, 车道, stable_id) 幂等：重复提交返回首次结果。
+
+    `producer` 形参**不生效**，返回值里的 producer 一律来自类型注册表。
+    为什么不由调用方声明：板块归属是「这个类型由哪个板块生产」的注册时事实，
+    调用方声明等于自己给自己开板块——营销可以自称 erp 绕开 ERP 侧巡检，
+    ERP 也能把账务事实标成营销事实。形参保留只为不破坏既有调用方签名，值直接丢弃。
+    """
     if not stable_id or not str(stable_id).strip():
         raise ErpError("INVALID_ARGUMENT", "stable_id 不能为空")
     if lane not in _LANE_INITIAL_STATUS:
@@ -86,11 +98,14 @@ def append_event(conn: Any, *, settings: Settings, tenant_id: str, event_type: s
     if occurred_at is None:
         raise ErpError("INVALID_ARGUMENT", "occurred_at 不能为空（事实发生时点不可省）")
 
+    del producer  # 调用方声明不采纳，见上方 docstring 与 0011 迁移注释
+
     _validate_payload(conn, tenant_id, event_type, payload)
 
     existing = fetch_one(
         conn,
-        "SELECT * FROM business_events WHERE tenant_id=%s AND lane=%s AND stable_id=%s",
+        f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+        "WHERE e.tenant_id=%s AND e.lane=%s AND e.stable_id=%s",
         (tenant_id, lane, stable_id),
     )
     if existing is not None:
@@ -109,11 +124,23 @@ def append_event(conn: Any, *, settings: Settings, tenant_id: str, event_type: s
             )
     row = fetch_one(
         conn,
-        "SELECT * FROM business_events WHERE tenant_id=%s AND lane=%s AND stable_id=%s",
+        f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+        "WHERE e.tenant_id=%s AND e.lane=%s AND e.stable_id=%s",
         (tenant_id, lane, stable_id),
     )
+    if row is None:
+        # INSERT 成功之后又查不到：只可能是它被别的事务清掉了（维护会话的 TRUNCATE）
+        # 或者类型注册表在两步之间被删行导致 JOIN 落空。原实现直接 row.get(...)，
+        # 在这里抛 AttributeError——错误路径上的未定义状态把「行没了」伪装成代码 bug。
+        raise ErpError(
+            "NOT_FOUND",
+            f"事件写入后读不回：{stable_id}（租户 {tenant_id}，车道 {lane}）；"
+            "常见原因是并发维护操作清空了表，请重试并确认无并发 TRUNCATE",
+            detail={"stable_id": stable_id, "lane": lane, "event_type": event_type},
+        )
     audit(conn, tenant_id, "event_appended", actor=actor, target=stable_id,
-          detail={"event_type": event_type, "lane": lane, "status": status})
+          detail={"event_type": event_type, "lane": lane, "status": status,
+                  "producer": row.get("producer")})
     return _event_view(row, duplicate=False)
 
 
@@ -122,8 +149,8 @@ def decide_event(conn: Any, *, tenant_id: str, stable_id: str, lane: str,
     """确认门：draft 车道事件的 accepted / rejected。唯一改变事件状态的人工入口。"""
     if decision not in ("accepted", "rejected"):
         raise ErpError("INVALID_ARGUMENT", "decision 须为 accepted 或 rejected")
-    row = fetch_one(conn, "SELECT * FROM business_events "
-                          "WHERE tenant_id=%s AND lane=%s AND stable_id=%s",
+    row = fetch_one(conn, f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+                          "WHERE e.tenant_id=%s AND e.lane=%s AND e.stable_id=%s",
                     (tenant_id, lane, stable_id))
     if row is None:
         raise ErpError("NOT_FOUND", f"事件不存在：{stable_id}", detail={"lane": lane})
@@ -140,16 +167,16 @@ def decide_event(conn: Any, *, tenant_id: str, stable_id: str, lane: str,
             )
     audit(conn, tenant_id, "event_decided", actor=actor, target=stable_id,
           detail={"decision": decision, "note": note})
-    return _event_view(fetch_one(conn, "SELECT * FROM business_events WHERE id=%s",
-                                (row["id"],)), duplicate=False)
+    return _event_view(fetch_one(conn, f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+                                      "WHERE e.id=%s", (row["id"],)), duplicate=False)
 
 
 def reverse_event(conn: Any, *, tenant_id: str, stable_id: str, lane: str,
                   reversal_stable_id: str, reversal_payload: dict[str, Any] | None = None,
                   actor: str = "human", note: str = "") -> dict[str, Any]:
     """冲正：新增一条反向事件并关联原事件；原事件置 reversed。原事件内容不改。"""
-    original = fetch_one(conn, "SELECT * FROM business_events "
-                               "WHERE tenant_id=%s AND lane=%s AND stable_id=%s",
+    original = fetch_one(conn, f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+                               "WHERE e.tenant_id=%s AND e.lane=%s AND e.stable_id=%s",
                          (tenant_id, lane, stable_id))
     if original is None:
         raise ErpError("NOT_FOUND", f"原事件不存在：{stable_id}")
@@ -161,8 +188,8 @@ def reverse_event(conn: Any, *, tenant_id: str, stable_id: str, lane: str,
         raise ErpError("INVALID_ARGUMENT", "冲正事件须有独立 stable_id（不得与原事件相同）")
 
     payload = reversal_payload if reversal_payload is not None else dict(original["payload"])
-    existing = fetch_one(conn, "SELECT * FROM business_events "
-                               "WHERE tenant_id=%s AND lane=%s AND stable_id=%s",
+    existing = fetch_one(conn, f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+                               "WHERE e.tenant_id=%s AND e.lane=%s AND e.stable_id=%s",
                          (tenant_id, lane, reversal_stable_id))
     if existing is None:
         with conn.transaction():
@@ -176,8 +203,8 @@ def reverse_event(conn: Any, *, tenant_id: str, stable_id: str, lane: str,
                      original["source_ref"], stable_id,
                      _jsonb({"reversal_note": note})),
                 )
-        existing = fetch_one(conn, "SELECT * FROM business_events "
-                                   "WHERE tenant_id=%s AND lane=%s AND stable_id=%s",
+        existing = fetch_one(conn, f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+                                   "WHERE e.tenant_id=%s AND e.lane=%s AND e.stable_id=%s",
                              (tenant_id, lane, reversal_stable_id))
     with conn.transaction():
         with conn.cursor() as cur:
@@ -185,8 +212,9 @@ def reverse_event(conn: Any, *, tenant_id: str, stable_id: str, lane: str,
                         "decided_by=%s WHERE id=%s", (actor, original["id"]))
     audit(conn, tenant_id, "event_reversed", actor=actor, target=stable_id,
           detail={"reversal_stable_id": reversal_stable_id})
-    return {"original": _event_view(fetch_one(conn, "SELECT * FROM business_events WHERE id=%s",
-                                             (original["id"],)), duplicate=False),
+    return {"original": _event_view(fetch_one(conn, f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+                                                    "WHERE e.id=%s", (original["id"],)),
+                                    duplicate=False),
             "reversal": _event_view(existing, duplicate=False)}
 
 
@@ -199,8 +227,8 @@ def revise_event(conn: Any, *, tenant_id: str, stable_id: str, lane: str,
                         (tenant_id, stable_id, lane, _jsonb(payload), actor, reason))
     audit(conn, tenant_id, "event_revised", actor=actor, target=stable_id,
           detail={"reason": reason})
-    row = fetch_one(conn, "SELECT * FROM business_events "
-                          "WHERE tenant_id=%s AND lane=%s AND stable_id=%s",
+    row = fetch_one(conn, f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
+                          "WHERE e.tenant_id=%s AND e.lane=%s AND e.stable_id=%s",
                     (tenant_id, lane, stable_id))
     revisions = fetch_all(conn, "SELECT old_payload, new_payload, revised_by, reason, revised_at "
                                 "FROM event_revisions WHERE event_id=%s ORDER BY revised_at",
@@ -210,25 +238,36 @@ def revise_event(conn: Any, *, tenant_id: str, stable_id: str, lane: str,
 
 def query_events(conn: Any, *, tenant_id: str, event_type: str | None = None,
                  lane: str | None = None, status: str | None = None,
+                 producer: str | None = None,
                  limit: int = 100, after_event_id: int = 0) -> dict[str, Any]:
-    """查询事件；返回值自带完整性声明（R8：读取必须声明完整性与降级）。"""
-    where = ["tenant_id = %s", "id > %s"]
+    """查询事件；返回值自带完整性声明（R8：读取必须声明完整性与降级）。
+
+    `producer` 默认 None = 不过滤：同一租户内事实跨板块可见，不设板块墙（design D6）。
+    需要只看某个板块时显式传 'erp' / 'marketing'——否则营销事件会淹掉 ERP 侧巡检。
+    不认识的 producer 值返回空结果 + declared_total=0，而不是报错：这是过滤条件，
+    不是入参授权（与 lane/status 同口径）。
+    """
+    where = ["e.tenant_id = %s", "e.id > %s"]
     params: list[Any] = [tenant_id, after_event_id]
     if event_type:
-        where.append("event_type = %s")
+        where.append("e.event_type = %s")
         params.append(event_type)
     if lane:
-        where.append("lane = %s")
+        where.append("e.lane = %s")
         params.append(lane)
     if status:
-        where.append("status = %s")
+        where.append("e.status = %s")
         params.append(status)
+    if producer:
+        where.append("et.producer = %s")
+        params.append(producer)
     clause = " AND ".join(where)
 
-    total = fetch_one(conn, f"SELECT COUNT(*) AS n FROM business_events WHERE {clause}", tuple(params))["n"]
-    rows = fetch_all(conn, f"SELECT * FROM business_events WHERE {clause} "
-                           f"ORDER BY id LIMIT %s", tuple(params + [limit]))
-    watermark = fetch_one(conn, f"SELECT COALESCE(MAX(id),0) AS w FROM business_events "
+    total = fetch_one(conn, f"SELECT COUNT(*) AS n FROM {_EVENT_FROM} WHERE {clause}",
+                      tuple(params))["n"]
+    rows = fetch_all(conn, f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} WHERE {clause} "
+                           f"ORDER BY e.id LIMIT %s", tuple(params + [limit]))
+    watermark = fetch_one(conn, f"SELECT COALESCE(MAX(e.id),0) AS w FROM {_EVENT_FROM} "
                                 f"WHERE {clause}", tuple(params))["w"]
     return {
         "items": [_event_view(r, duplicate=False) for r in rows],
@@ -241,7 +280,7 @@ def pending_projection_events(conn: Any, *, tenant_id: str, after_event_id: int 
     """续跑闸（R7）：投影只处理水位之后的事件，重跑不重做已投影部分。"""
     rows = fetch_all(
         conn,
-        "SELECT e.* FROM business_events e "
+        f"SELECT {_EVENT_COLS} FROM {_EVENT_FROM} "
         "WHERE e.tenant_id=%s AND e.id > %s AND e.status='accepted' "
         "  AND NOT EXISTS (SELECT 1 FROM object_events oe WHERE oe.event_id = e.id) "
         "ORDER BY e.id LIMIT %s",
@@ -348,6 +387,8 @@ def _event_view(row: dict[str, Any], *, duplicate: bool) -> dict[str, Any]:
         "occurred_at": row["occurred_at"],
         "lane": row["lane"],
         "status": row["status"],
+        # 板块归属来自类型注册表（JOIN event_types），不是调用方声明
+        "producer": row.get("producer"),
         "source_ref": row["source_ref"],
         "reversal_of": row["reversal_of"],
         "payload": row["payload"],

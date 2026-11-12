@@ -463,16 +463,21 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         event_type: str | None = None,
         lane: str | None = None,
         status: str | None = None,
+        producer: str | None = None,
         limit: int = 100,
         after_event_id: int = 0,
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
-        """查询事件流；返回 completeness（truncated 为真时不得当成全部）。"""
+        """查询事件流；返回 completeness（truncated 为真时不得当成全部）。
+
+        `producer` 可选按板块过滤（erp / marketing）；不传则同租户跨板块可见。
+        返回值每条都带 producer——板块归属由类型注册表决定，不是调用方声明。
+        """
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)
             out = _events.query_events(conn, tenant_id=tenant, event_type=event_type,
-                                       lane=lane, status=status, limit=limit,
-                                       after_event_id=after_event_id)
+                                       lane=lane, status=status, producer=producer,
+                                       limit=limit, after_event_id=after_event_id)
             return {"data": out["items"], "completeness": out["completeness"]}
 
     # ---- 26. query_object_balance：数量面 ----

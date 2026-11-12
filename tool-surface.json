@@ -593,7 +593,9 @@
       "POSTING_RULE_MISSING",
       "FEE_COVERAGE_MISSING",
       "CREDIT_EXCEEDED",
-      "INTERNAL"
+      "INTERNAL",
+      "EVENT_FABRICATED_FACT",
+      "EVENT_PRODUCER_MISMATCH"
     ],
     "shape": "每个失败返回机器可读 code（取自封闭集合）+ 可读描述 + default_hint 修正建议；不伪装空成功。"
   },

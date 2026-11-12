@@ -37,3 +37,15 @@
 | decider（持确认门） | `decide_event`、`query_events` | 唯一能把 pending 变成 fact 的岗位；拒也要留状态。 |
 
 `decide_event` 只出现在拍板岗：它是 「写事实」的唯一人工入口，和账本确认门同级。
+
+## 多板块生产者（营销接入）
+
+事件层从「ERP 单生产者」扩成**多板块、单表单注册表**（`producer` 维度：`erp` / `marketing`）。agent 要记住四件事：
+
+1. **类型名带板块前缀**。营销类型的名字一律以 `marketing.` 开头（已登记 `marketing.content.published`、`marketing.desk.conversation_closed`、`marketing.channel.order_paid`）。类型名与 `producer` 登记不自洽会直接判红（`EVENT_PRODUCER_MISMATCH`）：单表里类型名是唯一的人工识别线索。
+2. **producer 由类型注册表决定，不由调用方声明**。写事件没有「我是哪个板块」这个参数；返回值里的 `producer` 是类型登记时的归属。理由：调用方声明等于自己给自己开板块——营销自称 ERP 就能绕开 ERP 侧巡检，反向也能把账务事实标成营销事实。
+3. **营销只产三类事实**：内容发布、客服会话关闭、渠道订单付款。每一类都对应仓内已存在的载体（注册表 `evidence_ref` 指出出处）；指不到载体的类型不许登记。
+4. **四个名字是黑名单**：投放花费、线索漏斗、活动、转化（含 `*_spend`、`lead_*`、`*_conversion` 等变体）登记即拒（`EVENT_FABRICATED_FACT`）；营销类型缺载体出处同样拒。先补载体（表或连接器只读面）再登记类型，不许先登记类型再找人填数。
+
+`query_events` 的 `producer` 参数是可选的：不传 = 同租户跨板块可见（不设板块墙）；传 `erp` / `marketing` 则只看一个板块。营销类型全部 `requires_posting=false`，因此不会进过账待补清单，也不会自动并入任何账本。
+

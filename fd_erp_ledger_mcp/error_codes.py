@@ -109,6 +109,18 @@ CATALOG: dict[str, ErrorCode] = {
         "EVENT_STATE", "invalid_argument", False,
         "事件状态不允许该迁移（仅 pending→accepted/rejected、accepted→reversed）。",
     ),
+    # 多板块生产者（change: fuse-marketing-onto-event-kernel 1.3-1.5）
+    "EVENT_PRODUCER_MISMATCH": ErrorCode(
+        "EVENT_PRODUCER_MISMATCH", "invalid_argument", False,
+        "事件类型名与生产者板块不自洽：marketing 类型必须以 marketing. 开头，erp 类型不得占用"
+        "该前缀。板块归属是类型注册时登记的属性，不由写入方声明——改名或改登记，不要两头各写一半。",
+    ),
+    "EVENT_FABRICATED_FACT": ErrorCode(
+        "EVENT_FABRICATED_FACT", "invalid_argument", False,
+        "该类型命中「仓内无载体」黑名单（花费/线索/活动/转化及其变体），或营销类型缺"
+        "evidence_ref（载体出处）。先补载体（表/连接器只读面）再登记类型；"
+        "无载体的类型此刻没有生产者，只会有编造者。",
+    ),
     "OBJECT_CONFLICT": ErrorCode(
         "OBJECT_CONFLICT", "invalid_argument", False,
         "对象余额是投影产物、不可直写；或同一对象维度下出现单位冲突（kg 与 pcs 不可相加）。",

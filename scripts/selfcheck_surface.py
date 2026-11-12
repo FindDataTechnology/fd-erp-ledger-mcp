@@ -122,6 +122,9 @@ CANONICAL_ERROR_CODES = frozenset({
     "EVENT_STATE",
     "OBJECT_CONFLICT",
     "POSTING_RULE_MISSING",
+    # 营销接入（fuse-marketing-onto-event-kernel 1.3-1.5）：前缀不自洽、无载体事实
+    "EVENT_PRODUCER_MISMATCH",
+    "EVENT_FABRICATED_FACT",
     "INTERNAL",
 })
 # 至少四类可区分语义（error_codes.py 的 REQUIRED_CLASSES）

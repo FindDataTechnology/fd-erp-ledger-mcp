@@ -40,6 +40,12 @@ def map_psycog_error(exc: Exception) -> ErpError:
         return ErpError("EVENT_IMMUTABLE", f"数据库拒绝改写事件：{text}")
     if "ERP_OBJECT_CONFLICT" in text:
         return ErpError("OBJECT_CONFLICT", f"数据库拒绝对象投影写入：{text}")
+    # 多板块生产者（0011）：注册侧闸抛的码必须在这里有匹配，否则会塌成 UPSTREAM_UNAVAILABLE
+    # ——调用方会以为上游抖了一下，而真相是「这个类型不许登记」。
+    if "ERP_EVENT_FABRICATED_FACT" in text:
+        return ErpError("EVENT_FABRICATED_FACT", f"数据库拒绝登记无载体的事件类型：{text}")
+    if "ERP_EVENT_PRODUCER_MISMATCH" in text:
+        return ErpError("EVENT_PRODUCER_MISMATCH", f"数据库拒绝板块与类型名不自洽的登记：{text}")
     if "ERP_EVENT_UNKNOWN_TYPE" in text:
         return ErpError("EVENT_UNKNOWN_TYPE", f"事件类型未登记：{text}")
     if "ERP_UNBALANCED" in text or "check_violation" in text and "balance" in text.lower():

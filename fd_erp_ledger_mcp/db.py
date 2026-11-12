@@ -31,7 +31,10 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 0009：过账 posting_rules / posting_links / posting_gaps（同上 change 3.1-3.4）。
 #: 0010：定型边界时区显式化 event_types.period_timezone + erp_event_is_finalized 改签名
 #:       （同上 change；修「定型时刻随会话时区漂移」的缺陷，见该迁移注释）。
-REQUIRED_SCHEMA_VERSION = "0010_period_timezone"
+#: 0011：事件类型注册表扩成多板块生产者——event_types 增 producer / domain / evidence_ref，
+#:       登记三个营销类型（内容发布/客服会话关闭/渠道订单付款），加注册侧三道闸
+#:       （前缀与 producer 自洽、四类无载体事实黑名单、营销类型须带载体出处）。
+REQUIRED_SCHEMA_VERSION = "0011_marketing_producers"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
