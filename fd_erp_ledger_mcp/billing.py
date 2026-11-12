@@ -719,9 +719,17 @@ def _fee_view(row: dict[str, Any], journal_proposal_id: Any = None) -> dict[str,
 
     `amount` 保留为兼容列（= 计价币种金额 = original_amount）；`original_amount` /
     `base_amount` / `fx_*` 对 0005 之前的存量行为 None（不补造折算口径）。
+
+    `refs` 是**单据引用**（计费时 `event["refs"]` 原样落到 `provenance.document_refs`）。
+    列表读面也必须带出来：缺了它，任何按单据/承运商归集都得逐条调 `get_fee_detail`，
+    而调用方自己维护一份「费用→单据」映射就是第二份事实源（change:
+    add-carrier-freight-dimension D4）。缺失回 `{}`，不省略字段。
     """
     prov = row["provenance"] if isinstance(row["provenance"], dict) else {}
     jp = prov.get("journal") or {}
+    refs = prov.get("document_refs")
+    if not isinstance(refs, dict):
+        refs = {}
 
     def _s(key: str) -> str | None:
         value = row.get(key)
@@ -744,6 +752,7 @@ def _fee_view(row: dict[str, Any], journal_proposal_id: Any = None) -> dict[str,
         "status": row["status"],
         "reversal_of": row["reversal_of"],
         "created_at": str(row["created_at"]),
+        "refs": refs,
         "journal_proposal_id": journal_proposal_id if journal_proposal_id is not None
                                else jp.get("proposal_id"),
     }

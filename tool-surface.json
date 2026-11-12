@@ -195,7 +195,7 @@
       "destructiveHint": false,
       "idempotentHint": true,
       "openWorldHint": false,
-      "behavior": "read · 分页查询费用明细（含红冲反向行 status='reversed' + reversal_of 关联）",
+      "behavior": "read · 分页查询费用明细（含红冲反向行 status='reversed' + reversal_of 关联；每行含 refs = 计费时的单据引用，缺失回 {}，供按单据/承运商归集时免 N+1）",
       "error_codes": [
         "INVALID_ARGUMENT",
         "TENANT_DENIED",

@@ -175,7 +175,10 @@ def test_bill_event_idempotent_repush(settings):
         res2 = bill_event(conn, settings=settings, tenant_id=TENANT, event=_event(qty=120))
         assert res2["duplicate"] is True
         assert [f["fee_id"] for f in res2["fees"]] == [f["fee_id"] for f in res1["fees"]]
-        assert len(list_fees(conn, TENANT)) == 1
+        rows = list_fees(conn, TENANT)
+        assert len(rows) == 1
+        # 列表读面必须带单据引用：缺了它按单据/承运商归集只能 N+1 或自建映射（第二份事实源）
+        assert rows[0]["refs"] == {"document": "SO-001", "job": "WH-88"}
         # UNIQUE(tenant_id, stable_id) 是 DB 兜底：直插重复行被唯一索引拒绝
         with pytest.raises(psycopg.errors.Error):
             with conn.transaction():
