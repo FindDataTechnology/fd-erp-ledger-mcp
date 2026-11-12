@@ -34,7 +34,11 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 0011：事件类型注册表扩成多板块生产者——event_types 增 producer / domain / evidence_ref，
 #:       登记三个营销类型（内容发布/客服会话关闭/渠道订单付款），加注册侧三道闸
 #:       （前缀与 producer 自洽、四类无载体事实黑名单、营销类型须带载体出处）。
-REQUIRED_SCHEMA_VERSION = "0011_marketing_producers"
+#: 0012：通用科目补固定资产业务两科目——1601 固定资产 / 1602 累计折旧（抵减资产，
+#:       封闭的 account_type 无 contra-asset，按 asset 登记靠 note 与贷方方向表达抵减）。
+#:       纯追加 + 幂等（ON CONFLICT (code) DO NOTHING），无数据迁移；
+#:       既有租户须重跑内核 CLI seed-accounts 才把两科目种进各自 accounts。
+REQUIRED_SCHEMA_VERSION = "0012_fixed_assets_accounts"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}

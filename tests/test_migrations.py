@@ -5,8 +5,8 @@ import psycopg
 import pytest
 
 from fd_erp_ledger_mcp.config import Settings
-from fd_erp_ledger_mcp.db import (REQUIRED_SCHEMA_VERSION, assert_schema_version,
-                                  mark_adopted, migrate)
+from fd_erp_ledger_mcp.db import (MIGRATIONS_DIR, REQUIRED_SCHEMA_VERSION,
+                                  assert_schema_version, mark_adopted, migrate)
 from fd_erp_ledger_mcp.errors import ErpError
 
 
@@ -97,7 +97,7 @@ def test_universal_accounts_preset_seeded(settings):
     for _code, _name, _name_en, atype in rows:
         by_type.setdefault(atype, []).append(_code)
     assert set(by_type) == {"asset", "liability", "equity", "revenue", "expense"}
-    assert len(rows) == 12  # 4 资产 + 2 负债 + 2 权益 + 1 收入 + 3 费用
+    assert len(rows) == 14  # 6 资产（含 1602 累计折旧抵减） + 2 负债 + 2 权益 + 1 收入 + 3 费用
     assert by_type["revenue"] == ["4000"]  # 收入唯一内核科目，行业细目走映射
 
 
@@ -107,14 +107,38 @@ def test_seed_universal_accounts_idempotent(settings):
     conn = psycopg.connect(settings.database_url, autocommit=True)
     try:
         first = seed_universal_accounts(conn, "seed-t1")
-        assert first["seeded"] == 12
+        assert first["seeded"] == 14
         again = seed_universal_accounts(conn, "seed-t1")
         assert again["seeded"] == 0  # 幂等：零新增
-        assert again["universal_present"] == 12
+        assert again["universal_present"] == 14
         types = dict(conn.execute(
             "SELECT code, account_type FROM accounts WHERE tenant_id='seed-t1' "
             "AND code IN (SELECT code FROM universal_accounts)").fetchall())
         assert types["4000"] == "revenue" and types["1000"] == "asset"
         assert types["5100"] == "expense" and types["2100"] == "liability"
+    finally:
+        conn.close()
+
+
+def test_fixed_assets_accounts_present(settings):
+    """0012：1601 固定资产 / 1602 累计折旧在预设里，且重放 DDL 幂等。"""
+    conn = psycopg.connect(settings.database_url, autocommit=True)
+    try:
+        rows = dict(
+            (r[0], r[1:]) for r in conn.execute(
+                "SELECT code, account_type, note FROM universal_accounts "
+                "WHERE code IN ('1601', '1602')").fetchall())
+        assert set(rows) == {"1601", "1602"}, f"缺科目：{sorted(rows)}"
+        # 1602 是抵减资产：封闭 account_type 无 contra-asset，按 asset 登记
+        assert rows["1601"][0] == "asset"
+        assert rows["1602"][0] == "asset"
+        assert "抵减" in (rows["1602"][1] or ""), rows["1602"][1]
+
+        # 重放两遍证明 DDL 本身幂等（migrate 会跳过已登记版本，故直接重放 SQL）
+        sql = (MIGRATIONS_DIR / "0012_fixed_assets_accounts.sql").read_text(encoding="utf-8")
+        conn.execute(sql)
+        conn.execute(sql)
+        total = conn.execute("SELECT COUNT(*) FROM universal_accounts").fetchone()[0]
+        assert total == 14
     finally:
         conn.close()

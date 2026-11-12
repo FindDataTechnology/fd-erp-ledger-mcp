@@ -248,5 +248,7 @@ def test_migration_0011_is_idempotent(settings):
         conn.execute(sql)
         assert conn.execute(
             "SELECT COUNT(*) FROM event_types WHERE producer = 'marketing'").fetchone()[0] == 3
+        # 只验「0011 已登记」，不钉 MAX(version)：钉最新版本会让每个后续迁移都无故弄红这个用例
         assert conn.execute(
-            "SELECT MAX(version) FROM schema_migrations").fetchone()[0] == "0011_marketing_producers"
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE version='0011_marketing_producers'").fetchone()[0] == 1
