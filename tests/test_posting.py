@@ -133,6 +133,41 @@ def test_rule_rejects_accounts_outside_machine_lane(settings):
         assert "1000" in (ei.value.detail or {}).get("forbidden_accounts", [])
 
 
+def test_rule_accepts_the_chart_codes_for_inventory_and_cogs(settings):
+    """通用科目 1200 存货 / 2000 应付 / 5000 营业成本必须在允许集内。
+
+    回归：旧白名单只有计费车道的 1405/2202/6401（都不在 subjects 预设里），
+    于是「到货过账」写到了按 1200 取数时看不见的科目上——分录有、余额是零。
+    """
+    with connection(settings) as conn:
+        drafted = posting.submit_posting_rule(
+            conn, tenant_id=TENANT, event_type="goods_received",
+            rule={"lines": [
+                {"account_code": "1200", "direction": "debit",
+                 "amount_from": "payload.cost"},
+                {"account_code": "2000", "direction": "credit",
+                 "amount_from": "payload.cost"}]})
+        assert drafted["version"]
+        cogs = posting.submit_posting_rule(
+            conn, tenant_id=TENANT, event_type="goods_issued",
+            rule={"lines": [
+                {"account_code": "5000", "direction": "debit",
+                 "amount_from": "payload.cost"},
+                {"account_code": "1200", "direction": "credit",
+                 "amount_from": "payload.cost"}]})
+        assert cogs["version"]
+        # 红线不变：现金/预收/权益仍不可由规则落账
+        with pytest.raises(ErpError) as ei:
+            posting.submit_posting_rule(
+                conn, tenant_id=TENANT, event_type="goods_received",
+                rule={"lines": [
+                    {"account_code": "2100", "direction": "debit",
+                     "amount_from": "payload.cost"},
+                    {"account_code": "4000", "direction": "credit",
+                     "amount_from": "payload.cost"}]})
+        assert "2100" in (ei.value.detail or {}).get("forbidden_accounts", [])
+
+
 def test_rule_requires_both_sides_and_amount_source(settings):
     with connection(settings) as conn:
         with pytest.raises(ErpError):
