@@ -53,7 +53,14 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #:       （change: add-fx-revaluation）。纯追加 + 幂等，无数据迁移。
 #: 0017：通用科目补生产成本 1401（在制品，change: add-manufacturing-orders）。
 #:       纯追加 + 幂等，无数据迁移；既有租户须重跑 seed-accounts。
-REQUIRED_SCHEMA_VERSION = "0017_wip_account"
+#: 0018：通用科目补增值税六科目（change: add-cn-localization-pack）——2221 应交税费 /
+#:       2221.01 应交增值税 / 2221.01.01 销项税额 / 2221.01.02 进项税额 /
+#:       2221.01.07 转出未交增值税 / 2221.02 未交增值税。科目码取自 localization/cn 数据包
+#:       实测（2221.01.05 是出口退税，不是转出未交增值税）。纯追加 + 幂等。
+#: 0019：通用科目补国别报表四科目（change: add-cn-localization-pack）——5301 营业外收入 /
+#:       5403 税金及附加 / 5711 营业外支出 / 5801 所得税费用。没有它们，小企业准则的利润表
+#:       出不了「净利润」（所得税无处可记，净利润永远等于利润总额）。纯追加 + 幂等。
+REQUIRED_SCHEMA_VERSION = "0019_cn_statements_accounts"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}

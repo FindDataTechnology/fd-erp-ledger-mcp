@@ -97,8 +97,8 @@ def test_universal_accounts_preset_seeded(settings):
     for _code, _name, _name_en, atype in rows:
         by_type.setdefault(atype, []).append(_code)
     assert set(by_type) == {"asset", "liability", "equity", "revenue", "expense"}
-    assert len(rows) == 18  # 8 资产（含 1602 累计折旧、1231 坏账准备两项抵减、1401 生产成本） + 2 负债 + 2 权益 + 1 收入 + 5 费用
-    assert by_type["revenue"] == ["4000"]  # 收入唯一内核科目，行业细目走映射
+    assert len(rows) == 28  # 8 资产（含 1602 累计折旧、1231 坏账准备两项抵减、1401 生产成本） + 8 负债（含 2221 增值税六科目） + 2 权益 + 2 收入（4000 + 5301 营业外收入） + 8 费用（含 5403/5711/5801）
+    assert by_type["revenue"] == ["4000", "5301"]  # 营业收入 + 营业外收入；其余收入细目走映射
 
 
 def test_seed_universal_accounts_idempotent(settings):
@@ -107,10 +107,10 @@ def test_seed_universal_accounts_idempotent(settings):
     conn = psycopg.connect(settings.database_url, autocommit=True)
     try:
         first = seed_universal_accounts(conn, "seed-t1")
-        assert first["seeded"] == 18
+        assert first["seeded"] == 28
         again = seed_universal_accounts(conn, "seed-t1")
         assert again["seeded"] == 0  # 幂等：零新增
-        assert again["universal_present"] == 18
+        assert again["universal_present"] == 28
         types = dict(conn.execute(
             "SELECT code, account_type FROM accounts WHERE tenant_id='seed-t1' "
             "AND code IN (SELECT code FROM universal_accounts)").fetchall())
@@ -139,7 +139,7 @@ def test_fixed_assets_accounts_present(settings):
         conn.execute(sql)
         conn.execute(sql)
         total = conn.execute("SELECT COUNT(*) FROM universal_accounts").fetchone()[0]
-        assert total == 18
+        assert total == 28
     finally:
         conn.close()
 
@@ -199,3 +199,56 @@ def test_0017_wip_account_in_preset(settings):
     assert [(c, t) for c, t, _ in rows] == [("1401", "asset")]
     assert "在制品" in (rows[0][2] or "")
     assert total == 1
+
+
+def test_0018_vat_accounts_in_preset(settings):
+    """0018：增值税六科目在预设里，科目码与 localization/cn 数据包一致。
+
+    特别钉住 2221.01.07（转出未交增值税）：最初写成 2221.01.05，而数据包里那是出口退税——
+    科目码是法定口径，不是命名偏好，错了会让月末结转挂到「出口退税」上。
+    """
+    from fd_erp_ledger_mcp.universal_accounts import seed_universal_accounts
+    want = {"2221", "2221.01", "2221.01.01", "2221.01.02", "2221.01.07", "2221.02"}
+    conn = psycopg.connect(settings.database_url, autocommit=True)
+    try:
+        seed_universal_accounts(conn, "seed-0018")
+        rows = dict(conn.execute(
+            "SELECT code, account_type FROM universal_accounts"
+            " WHERE code = ANY(%s)", (sorted(want),)).fetchall())
+        sql = (MIGRATIONS_DIR / "0018_vat_accounts.sql").read_text(encoding="utf-8")
+        conn.execute(sql)
+        conn.execute(sql)
+        total = conn.execute(
+            "SELECT COUNT(*) FROM universal_accounts WHERE code = ANY(%s)",
+            (sorted(want),)).fetchone()[0]
+    finally:
+        conn.close()
+    assert set(rows) == want
+    assert {t for t in rows.values()} == {"liability"}
+    assert total == 6, "重放必须幂等：六条不多不少"
+    assert "2221.01.05" not in rows, "2221.01.05 是出口退税，不是转出未交增值税"
+
+
+def test_0019_cn_statements_accounts_in_preset(settings):
+    """0019：营业外收入/税金及附加/营业外支出/所得税费用在预设里。
+
+    没有 5801，小企业准则利润表的「净利润」永远等于利润总额——报表看着完整，其实是错的。
+    """
+    from fd_erp_ledger_mcp.universal_accounts import seed_universal_accounts
+    want = {"5301": "revenue", "5403": "expense", "5711": "expense", "5801": "expense"}
+    conn = psycopg.connect(settings.database_url, autocommit=True)
+    try:
+        seed_universal_accounts(conn, "seed-0019")
+        rows = dict(conn.execute(
+            "SELECT code, account_type FROM universal_accounts"
+            " WHERE code = ANY(%s)", (sorted(want),)).fetchall())
+        sql = (MIGRATIONS_DIR / "0019_cn_statements_accounts.sql").read_text(encoding="utf-8")
+        conn.execute(sql)
+        conn.execute(sql)
+        total = conn.execute(
+            "SELECT COUNT(*) FROM universal_accounts WHERE code = ANY(%s)",
+            (sorted(want),)).fetchone()[0]
+    finally:
+        conn.close()
+    assert rows == want
+    assert total == 4, "重放必须幂等"
