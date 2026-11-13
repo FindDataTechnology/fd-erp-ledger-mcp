@@ -97,7 +97,7 @@ def test_universal_accounts_preset_seeded(settings):
     for _code, _name, _name_en, atype in rows:
         by_type.setdefault(atype, []).append(_code)
     assert set(by_type) == {"asset", "liability", "equity", "revenue", "expense"}
-    assert len(rows) == 28  # 8 资产（含 1602 累计折旧、1231 坏账准备两项抵减、1401 生产成本） + 8 负债（含 2221 增值税六科目） + 2 权益 + 2 收入（4000 + 5301 营业外收入） + 8 费用（含 5403/5711/5801）
+    assert len(rows) == 32  # 8 资产（含 1602 累计折旧、1231 坏账准备两项抵减、1401 生产成本） + 12 负债（2221 增值税六科目 + 附加税与所得税四科目 + 2000/2100） + 2 权益 + 2 收入 + 8 费用
     assert by_type["revenue"] == ["4000", "5301"]  # 营业收入 + 营业外收入；其余收入细目走映射
 
 
@@ -107,10 +107,10 @@ def test_seed_universal_accounts_idempotent(settings):
     conn = psycopg.connect(settings.database_url, autocommit=True)
     try:
         first = seed_universal_accounts(conn, "seed-t1")
-        assert first["seeded"] == 28
+        assert first["seeded"] == 32
         again = seed_universal_accounts(conn, "seed-t1")
         assert again["seeded"] == 0  # 幂等：零新增
-        assert again["universal_present"] == 28
+        assert again["universal_present"] == 32
         types = dict(conn.execute(
             "SELECT code, account_type FROM accounts WHERE tenant_id='seed-t1' "
             "AND code IN (SELECT code FROM universal_accounts)").fetchall())
@@ -139,7 +139,7 @@ def test_fixed_assets_accounts_present(settings):
         conn.execute(sql)
         conn.execute(sql)
         total = conn.execute("SELECT COUNT(*) FROM universal_accounts").fetchone()[0]
-        assert total == 28
+        assert total == 32
     finally:
         conn.close()
 
@@ -251,4 +251,27 @@ def test_0019_cn_statements_accounts_in_preset(settings):
     finally:
         conn.close()
     assert rows == want
+    assert total == 4, "重放必须幂等"
+
+
+def test_0020_cn_surcharge_accounts_in_preset(settings):
+    """0020：附加税与所得税四科目在预设里（税表要按报表项目取余额）。"""
+    from fd_erp_ledger_mcp.universal_accounts import seed_universal_accounts
+    want = {"2221.11", "2221.12", "2221.13", "2221.14"}
+    conn = psycopg.connect(settings.database_url, autocommit=True)
+    try:
+        seed_universal_accounts(conn, "seed-0020")
+        rows = dict(conn.execute(
+            "SELECT code, account_type FROM universal_accounts"
+            " WHERE code = ANY(%s)", (sorted(want),)).fetchall())
+        sql = (MIGRATIONS_DIR / "0020_cn_surcharge_accounts.sql").read_text(encoding="utf-8")
+        conn.execute(sql)
+        conn.execute(sql)
+        total = conn.execute(
+            "SELECT COUNT(*) FROM universal_accounts WHERE code = ANY(%s)",
+            (sorted(want),)).fetchone()[0]
+    finally:
+        conn.close()
+    assert set(rows) == want
+    assert set(rows.values()) == {"liability"}
     assert total == 4, "重放必须幂等"

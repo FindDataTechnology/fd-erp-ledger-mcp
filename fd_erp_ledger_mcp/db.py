@@ -60,7 +60,10 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 0019：通用科目补国别报表四科目（change: add-cn-localization-pack）——5301 营业外收入 /
 #:       5403 税金及附加 / 5711 营业外支出 / 5801 所得税费用。没有它们，小企业准则的利润表
 #:       出不了「净利润」（所得税无处可记，净利润永远等于利润总额）。纯追加 + 幂等。
-REQUIRED_SCHEMA_VERSION = "0019_cn_statements_accounts"
+#: 0020：通用科目补附加税与所得税四科目（change: add-cn-surcharge-and-income-tax）——
+#:       2221.11 应交企业所得税 / 2221.12 城建税 / 2221.13 教育费附加 / 2221.14 地方教育附加。
+#:       没有它们，附加税只能挤进「其他经营费用」（报表项目对不上），所得税无处可挂。
+REQUIRED_SCHEMA_VERSION = "0020_cn_surcharge_accounts"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
