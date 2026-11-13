@@ -87,8 +87,14 @@ CANONICAL_TOOLS = frozenset({
     "list_posting_rules",
     "post_event",
     "list_posting_gaps",
+    # 期间关账（change: add-period-close）
+    "close_period",
+    "reopen_period",
+    "period_status",
+    "period_report",
+    "list_periods",
 })
-EXPECTED_TOOL_COUNT = 32
+EXPECTED_TOOL_COUNT = 37
 
 # 行为属性（mcp-surface-contract「只读/破坏性/幂等」+ openWorld 协议层第四项）
 REQUIRED_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
@@ -106,6 +112,7 @@ CANONICAL_ERROR_CODES = frozenset({
     "UNBALANCED",
     "APPEND_ONLY",
     "FX_UNSOURCED",
+    "PERIOD_CLOSED",
     "PROPOSAL_STATE",
     "RECON_TASK_NOT_FOUND",
     # 计费域（add-supply-chain-vertical 任务 1.x）

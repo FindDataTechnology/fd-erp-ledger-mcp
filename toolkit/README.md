@@ -1,6 +1,6 @@
 # ERP 内核工具书（agent 侧）
 
-本工具书是 agent 侧说明书，不是新能力；工具面真源是 `../tool-surface.json`（32 件 / 8 组）。本目录只回答：这组工具能做什么、不许做什么、硬纪律是什么、哪类岗位能碰哪几件。
+本工具书是 agent 侧说明书，不是新能力；工具面真源是 `../tool-surface.json`（37 件 / 9 组）。本目录只回答：这组工具能做什么、不许做什么、硬纪律是什么、哪类岗位能碰哪几件。
 
 - 机器可读锚：`catalog.json`（组 → 工具 → 允许岗位 → 纪律 id → forbiddens）。闸 `scripts/check_toolkit.py` 用它与工具面做双向核对。
 - 人读正文：`cards/<group_id>.md`，一组一张卡。
@@ -52,8 +52,13 @@
 | `list_posting_rules` | posting | 读 | inspector / analyst / decider | erp-posting-fleet |
 | `post_event` | posting | 派生写（过账） | analyst | erp-posting-fleet / erp-payables-fleet |
 | `list_posting_gaps` | posting | 读 | inspector / analyst / decider | erp-posting-fleet |
+| `close_period` | period | 确认门（关账） | decider | erp-payables-fleet / erp-posting-fleet |
+| `reopen_period` | period | 确认门（重开） | decider | erp-payables-fleet / erp-posting-fleet |
+| `period_status` | period | 读 | inspector / analyst / decider | erp-payables-fleet |
+| `period_report` | period | 读（快照核对） | inspector / analyst / decider | erp-payables-fleet |
+| `list_periods` | period | 读 | inspector / analyst / decider | erp-payables-fleet |
 
-合计 32 行 = `tool-surface.json` 32 件，逐名相等（缺一行、多一行都会被闸判红）。
+合计 37 行 = `tool-surface.json` 37 件，逐名相等（缺一行、多一行都会被闸判红）。
 
 ## 团队覆盖说明
 

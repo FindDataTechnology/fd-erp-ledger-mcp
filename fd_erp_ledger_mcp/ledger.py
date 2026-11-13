@@ -12,7 +12,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from .config import Settings
+from .config import Settings, book_today
 from .db import fetch_all
 from .errors import ErpError, map_psycog_error
 from .fx import resolve_rate, validate_line_fx
@@ -125,12 +125,20 @@ def post_lines(conn: Any, *, settings: Settings, tenant_id: str, stable_id: str,
                lines: list[dict[str, Any]], source_ref: str | None,
                confirmed_by: str, is_reversal: bool = False,
                reversal_of: str | None = None,
-               dimensions: dict[str, str] | None = None) -> dict[str, Any]:
+               dimensions: dict[str, str] | None = None,
+               booked_on: Any = None) -> dict[str, Any]:
     """把已确认提案的分录行落账。返回 txn_id 与行数。
+
+    `booked_on` 是**业务日期**（这笔记的是哪一天的业务），与 `posted_at`（落账时刻）分开：
+    10 月的单据 11 月才确认，期间归属仍应是 10 月。缺省按账面时区当日——不取进程本地时区，
+    否则换台机器就换了期间（而那种偏移不报错，只让报表和客户账面对不上）。
 
     借贷必平由 DB 延迟约束触发器在 COMMIT 时判定：不平则整笔回滚、
     异常上抛为 UNBALANCED（proposal 保持 pending，账本零变化）。
+    业务日期落在已关期间时，DB 的 BEFORE INSERT 触发器抛 ERP_PERIOD_CLOSED 前缀，
+    这里由 map_psycog_error 翻成封闭码（应用层不重复判断，判断只在一处）。
     """
+    day = booked_on if booked_on not in (None, "") else book_today(settings)
     txn_id = str(uuid.uuid4())
     provenance = json.dumps({
         "stable_id": stable_id,
@@ -146,8 +154,8 @@ def post_lines(conn: Any, *, settings: Settings, tenant_id: str, stable_id: str,
                         "INSERT INTO journal_entries("
                         "tenant_id, txn_id, line_no, account_code, direction, amount, currency, "
                         "amount_base, fx_rate, fx_as_of, fx_source, stable_id, source_ref, "
-                        "is_reversal, reversal_of, provenance, dimensions) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb) "
+                        "is_reversal, reversal_of, provenance, dimensions, booked_on) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s) "
                         "ON CONFLICT (tenant_id, stable_id, line_no) DO NOTHING",
                         (tenant_id, txn_id, line["line_no"], line["account_code"],
                          line["direction"], line["amount"], line["currency"],
@@ -155,7 +163,7 @@ def post_lines(conn: Any, *, settings: Settings, tenant_id: str, stable_id: str,
                          line["fx_source"], stable_id, source_ref,
                          is_reversal, reversal_of, provenance,
                          json.dumps(_line_dimensions(line, dimensions),
-                                    ensure_ascii=False)),
+                                    ensure_ascii=False), day),
                     )
     except Exception as exc:
         # 借贷必平是 DEFERRABLE 约束：在事务 COMMIT 时触发，异常从 with 块边界
@@ -191,10 +199,16 @@ def compute_balance(conn: Any, tenant_id: str, account_code: str | None,
 
 def query_entries(conn: Any, tenant_id: str, *, account_code: str | None = None,
                   txn_id: str | None = None,
-                  dimensions: dict[str, str] | None = None) -> list[dict[str, Any]]:
+                  dimensions: dict[str, str] | None = None,
+                  period: str | None = None) -> list[dict[str, Any]]:
+    """账本分录查询。`period` 为会计期间 `YYYY-MM`，按**业务日期**过滤。
+
+    期间过滤走 booked_on（DATE）而不是 posted_at（TIMESTAMPTZ）：后者要按某个时区截断，
+    于是「查询的连接是谁开的」会改变答案——0010 在事件定型边界上栽过同款。
+    """
     sql = ("SELECT txn_id, line_no, account_code, direction, amount, currency, "
            "amount_base, fx_rate, fx_as_of, fx_source, stable_id, source_ref, "
-           "is_reversal, reversal_of, posted_at, provenance, dimensions "
+           "is_reversal, reversal_of, posted_at, booked_on, provenance, dimensions "
            "FROM journal_entries WHERE tenant_id=%s ")
     params: list[Any] = [tenant_id]
     if account_code:
@@ -207,13 +221,25 @@ def query_entries(conn: Any, tenant_id: str, *, account_code: str | None = None,
         # 包含语义：给几个键就是「全部命中」（design D4）。
         sql += "AND dimensions @> %s::jsonb "
         params.append(json.dumps(dimensions, ensure_ascii=False))
-    sql += "ORDER BY posted_at, txn_id, line_no"
+    if period not in (None, ""):
+        raw = str(period).strip()
+        if len(raw) != 7 or raw[4] != "-" or not raw.replace("-", "").isdigit():
+            raise ErpError("INVALID_ARGUMENT",
+                           f"期间须为 YYYY-MM：{period!r}")
+        # 用半开区间而不是 to_char(booked_on)=...：让 (tenant_id, booked_on) 索引用得上，
+        # 且语义直接是「业务日期落在该月 1 日到次月 1 日之间」。
+        year, month = int(raw[:4]), int(raw[5:])
+        start = f"{year:04d}-{month:02d}-01"
+        end = f"{year + 1:04d}-01-01" if month == 12 else f"{year:04d}-{month + 1:02d}-01"
+        sql += "AND booked_on >= %s::date AND booked_on < %s::date "
+        params.extend([start, end])
+    sql += "ORDER BY booked_on, posted_at, txn_id, line_no"
     rows = fetch_all(conn, sql, tuple(params))
     for r in rows:
         for k in ("amount", "amount_base", "fx_rate"):
             if r[k] is not None:
                 r[k] = str(r[k])
-        for k in ("fx_as_of", "posted_at"):
+        for k in ("fx_as_of", "posted_at", "booked_on"):
             if r[k] is not None:
                 r[k] = str(r[k])
     return rows

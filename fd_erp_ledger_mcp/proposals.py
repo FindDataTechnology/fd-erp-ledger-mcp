@@ -8,10 +8,11 @@
 """
 from __future__ import annotations
 
+import datetime
 import json
 from typing import Any
 
-from .config import Settings
+from .config import Settings, book_today
 from .db import fetch_all, fetch_one
 from .errors import ErpError
 from .dimensions import normalize_dimensions
@@ -29,6 +30,29 @@ MACHINE_LANE_SUBMITTER = "billing-engine"
 MACHINE_LANE_ACCOUNTS = frozenset({"1300", "4000", "5100", "5200"})
 
 
+def parse_booked_on(value: Any, settings: Settings) -> datetime.date:
+    """业务日期：显式传入必须合法，缺省取账面时区的今天。
+
+    不接受「按本机时区解释的今天」——那会让同一批单据在不同机器上落进不同期间
+    （UTC 23:30 在上海已是次日）。日期字符串只认 `YYYY-MM-DD`。
+    """
+    if value in (None, ""):
+        return book_today(settings)
+    if isinstance(value, datetime.datetime):
+        raise ErpError("INVALID_ARGUMENT",
+                       "业务日期须为 YYYY-MM-DD（date），不接受带时刻的值")
+    if isinstance(value, datetime.date):
+        return value
+    raw = str(value).strip()
+    try:
+        if len(raw) != 10:
+            raise ValueError
+        return datetime.date.fromisoformat(raw)
+    except ValueError:
+        raise ErpError("INVALID_ARGUMENT",
+                       f"业务日期不合法：{value!r}（须 YYYY-MM-DD）") from None
+
+
 def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
                     stable_id: str, lines: list[dict[str, Any]],
                     source_ref: str | None = None,
@@ -36,6 +60,7 @@ def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
                     lane_fleet: str | None = None, lane_post: str | None = None,
                     lane_title: str | None = None, lane_target: str | None = None,
                     dimensions: Any = None,
+                    booked_on: Any = None,
                     submitted_by: str = "agent") -> dict[str, Any]:
     if not stable_id or not str(stable_id).strip():
         raise ErpError("INVALID_ARGUMENT", "stable_id 不能为空")
@@ -43,8 +68,14 @@ def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
         raise ErpError("INVALID_ARGUMENT", "kind 须为 journal 或 reversal")
     if kind == "reversal" and not reversal_of:
         raise ErpError("INVALID_ARGUMENT", "冲正提案须带 reversal_of（原 txn_id）")
+    if kind == "reversal" and booked_on not in (None, ""):
+        # 冲正落在**开放期间**：更正不该回头改已关期间的数，否则关账白关。
+        # 静默改写成今天会让调用方以为自己指定成功了——所以直接拒。
+        raise ErpError("INVALID_ARGUMENT",
+                       "冲正提案不接受业务日期：冲正分录取账面时区当日，落在开放期间")
     # 维度先校验、后查幂等：非法维度不该因为「同 stable_id 已存在」被悄悄放过去。
     dims = normalize_dimensions(dimensions)
+    day = parse_booked_on(booked_on, settings)
 
     # 幂等：已存在同 stable_id 直接返回首次结果，不重复入账、不报错。
     existing = fetch_one(
@@ -80,12 +111,12 @@ def submit_proposal(conn: Any, *, settings: Settings, tenant_id: str,
             cur.execute(
                 "INSERT INTO proposals(tenant_id, stable_id, kind, payload, status, "
                 "reversal_of, source_ref, lane_fleet, lane_post, lane_title, lane_target, "
-                "dimensions) "
-                "VALUES (%s,%s,%s,%s::jsonb,'pending',%s,%s,%s,%s,%s,%s,%s::jsonb) "
+                "dimensions, booked_on) "
+                "VALUES (%s,%s,%s,%s::jsonb,'pending',%s,%s,%s,%s,%s,%s,%s::jsonb,%s) "
                 "ON CONFLICT (tenant_id, stable_id) DO NOTHING",
                 (tenant_id, stable_id, kind, payload, reversal_of, source_ref,
                  lane_fleet, lane_post, lane_title, lane_target,
-                 json.dumps(dims, ensure_ascii=False)),
+                 json.dumps(dims, ensure_ascii=False), day),
             )
     row = fetch_one(
         conn, "SELECT * FROM proposals WHERE tenant_id=%s AND stable_id=%s",
@@ -108,6 +139,7 @@ def _proposal_view(row: dict[str, Any] | None, *, duplicate: bool = False) -> di
         "reversal_of": row["reversal_of"],
         "source_ref": row["source_ref"],
         "created_at": str(row["created_at"]),
+        "booked_on": str(row["booked_on"]) if row.get("booked_on") else None,
         "dimensions": row.get("dimensions") or {},
         "duplicate": duplicate,
         "idempotent_hit": duplicate,
@@ -116,7 +148,7 @@ def _proposal_view(row: dict[str, Any] | None, *, duplicate: bool = False) -> di
 
 def list_proposals(conn: Any, tenant_id: str, status: str | None = None) -> list[dict[str, Any]]:
     sql = ("SELECT id, stable_id, kind, status, reversal_of, source_ref, "
-           "lane_fleet, lane_post, lane_title, lane_target, created_at, "
+           "lane_fleet, lane_post, lane_title, lane_target, created_at, booked_on, "
            "decided_at, decided_by, decision_note, dimensions "
            "FROM proposals WHERE tenant_id=%s ")
     params: list[Any] = [tenant_id]
@@ -126,8 +158,8 @@ def list_proposals(conn: Any, tenant_id: str, status: str | None = None) -> list
     sql += "ORDER BY created_at, id"
     rows = fetch_all(conn, sql, tuple(params))
     for r in rows:
-        for k in ("created_at", "decided_at"):
-            if r[k] is not None:
+        for k in ("created_at", "decided_at", "booked_on"):
+            if r.get(k) is not None:
                 r[k] = str(r[k])
     return rows
 
@@ -172,6 +204,7 @@ def confirm_proposal(conn: Any, *, settings: Settings, tenant_id: str,
         is_reversal=(row["kind"] == "reversal"),
         reversal_of=row["reversal_of"],
         dimensions=row.get("dimensions") or {},
+        booked_on=row.get("booked_on"),
     )
     with conn.transaction():
         with conn.cursor() as cur:

@@ -22,8 +22,10 @@ EXPECTED_TOOLS = {
     "query_object_balance", "project_event",
     "submit_posting_rule", "approve_posting_rule", "list_posting_rules",
     "post_event", "list_posting_gaps",
+    # 期间关账（add-period-close）
+    "close_period", "reopen_period", "period_status", "period_report", "list_periods",
 }
-EXPECTED_TOOL_COUNT = 32
+EXPECTED_TOOL_COUNT = 37
 
 
 def test_runtime_annotations_cover_exact_set():

@@ -54,6 +54,10 @@ def map_psycog_error(exc: Exception) -> ErpError:
         return ErpError("APPEND_ONLY", f"数据库拒绝改/删已落账分录：{text}")
     if "ERP_FX_UNSOURCED" in text or "erp_fx_unsourced" in text:
         return ErpError("FX_UNSOURCED", f"数据库拒绝无出处汇率分录：{text}")
+    # 期间闸（0014）：必须排在「UPSTREAM_UNAVAILABLE 兜底」之前。漏了这条映射，
+    # 关账后的落账会被报成「库抖了」，而调用方会重试——重试永远不会成功。
+    if "ERP_PERIOD_CLOSED" in text:
+        return ErpError("PERIOD_CLOSED", f"数据库拒绝落账到已关期间：{text}")
     if "ERP_TENANT" in text:
         return ErpError("TENANT_DENIED", f"数据库拒绝跨租户写入：{text}")
     if "unique_violation" in text or "23505" in text:

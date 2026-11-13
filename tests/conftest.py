@@ -50,7 +50,7 @@ def _reset_db(request):
                     # 对象会留下来，而 `SELECT ... FROM objects` 不带 ORDER BY ——
                     # 于是「只有一行」的断言按查询顺序时绿时红（11-13 实测一次假红）。
                     "objects, object_balances, object_events, business_events, "
-                    "event_revisions "
+                    "event_revisions, accounting_periods "
                     "RESTART IDENTITY CASCADE"
                 )
     finally:

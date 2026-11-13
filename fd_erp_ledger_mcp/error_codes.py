@@ -60,6 +60,11 @@ CATALOG: dict[str, ErrorCode] = {
         "FX_UNSOURCED", "invalid_argument", False,
         "跨币种分录缺少可溯汇率（rate/as_of/source）或 fx_facts 无对应事实；拒绝使用无出处汇率。",
     ),
+    "PERIOD_CLOSED": ErrorCode(
+        "PERIOD_CLOSED", "invalid_argument", False,
+        "期间已关账，业务日期落在该期间的分录被拒；要改该期数字须先重开期间（带理由），"
+        "或在开放期间做冲正。",
+    ),
     "PROPOSAL_STATE": ErrorCode(
         "PROPOSAL_STATE", "invalid_argument", False,
         "proposal 状态不允许该操作（仅 pending 可确认/拒绝）。",

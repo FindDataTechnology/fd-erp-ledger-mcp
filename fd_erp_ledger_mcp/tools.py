@@ -1,4 +1,4 @@
-"""32 个 MCP 工具（账本面 2.1-2.4 + 计费 1.x + 信用 4.2 + 事件/数量/过账 establish-erp-event-kernel 5.1）。
+"""37 个 MCP 工具（账本面 2.1-2.4 + 计费 1.x + 信用 4.2 + 事件/数量/过账 establish-erp-event-kernel 5.1）。
 
 agent 写路径只出 proposal 或拟稿事件（确认门是拟稿的唯一落账入口）；外部事实经导入车道上牌直收，不经确认门。
 全部工具经 safe_tool 统一错误语义 + rows_returned 计量戳。
@@ -17,6 +17,7 @@ from . import billing as _billing
 from . import credit as _credit
 from . import events as _events
 from . import ledger as _ledger
+from . import periods as _periods
 from . import posting as _posting
 from .proposals import (confirm_proposal as _confirm, list_proposals as _list,
                         reject_proposal as _reject, submit_proposal as _submit)
@@ -608,3 +609,71 @@ def register(mcp: FastMCP, settings: Settings) -> None:
             tenant = resolve_tenant(conn, settings, tenant_id)
             out = _posting.list_posting_gaps(conn, tenant_id=tenant)
             return {"data": out["items"], "completeness": out["completeness"]}
+
+    # ---- 33-37. 期间关账（add-period-close）----
+    #
+    # 关账是账本的**时间轴**，不是某个板块的竖井：期间台账（close/reopen 只追加）、
+    # 落账闸（BEFORE INSERT 触发器）、关账快照都在内核库里。这几个工具只做读写封装，
+    # 顺序关账/只重开最近一期/快照复算等判断全在 periods 模块，工具层不重复。
+
+    @mcp.tool(annotations=annotations_for("close_period"))
+    @safe_tool
+    def close_period(
+        period: str,
+        actor: str,
+        note: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """关账（YYYY-MM）：顺序关账 + 写快照；已关重复调用幂等。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _periods.close(conn, settings=settings, tenant_id=tenant,
+                                  period=period, actor=actor, note=note)
+
+    @mcp.tool(annotations=annotations_for("reopen_period"))
+    @safe_tool
+    def reopen_period(
+        period: str,
+        actor: str,
+        reason: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """重开期间：只认最近一个已关期间，且必须给理由（追加记录，不覆盖历史）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _periods.reopen(conn, settings=settings, tenant_id=tenant,
+                                   period=period, actor=actor, reason=reason)
+
+    @mcp.tool(annotations=annotations_for("period_status"))
+    @safe_tool
+    def period_status(
+        period: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """查某期间是否关账 + 最近一次动作（谁、何时、理由、快照摘要）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _periods.status(conn, tenant, period)
+
+    @mcp.tool(annotations=annotations_for("period_report"))
+    @safe_tool
+    def period_report(
+        period: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """关账快照 vs 当前复算：一致 verified=true；不一致逐科目点名差额。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            return _periods.report(conn, settings=settings, tenant_id=tenant,
+                                   period=period)
+
+    @mcp.tool(annotations=annotations_for("list_periods"))
+    @safe_tool
+    def list_periods(
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """列出有记录的期间及其当前状态（按期间升序）。"""
+        with connection(settings) as conn:
+            tenant = resolve_tenant(conn, settings, tenant_id)
+            rows = _periods.list_periods(conn, tenant)
+            return {"data": rows, "rows_returned": len(rows), "ok": True}

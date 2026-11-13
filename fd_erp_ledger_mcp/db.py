@@ -41,7 +41,11 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 0013：分析维度——proposals / journal_entries 各增 dimensions JSONB（默认空集）+ GIN 索引；
 #:       键是封闭集（department/project/channel/cost_center/entity），值是自由字符串。
 #:       纯追加、不回填历史（未标注就是空集，不猜归属）；既有账务语义（借贷必平/幂等/余额重算）不变。
-REQUIRED_SCHEMA_VERSION = "0013_analytical_dimensions"
+#: 0014：业务日期 + 期间关账（change: add-period-close）——proposals / journal_entries 各增
+#:       booked_on DATE（历史行按显式 Asia/Shanghai 从 posted_at 回填），accounting_periods
+#:       追加式期间台账（close/reopen + 关账快照），journal_entries 落账闸（已关期间拒收）。
+#:       booked_on 是 DATE 而非 timestamptz：期间归属因此与会话时区彻底解耦（0010 的教训）。
+REQUIRED_SCHEMA_VERSION = "0014_period_close"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}

@@ -470,6 +470,72 @@
         "SCHEMA_OUTDATED",
         "UPSTREAM_UNAVAILABLE"
       ]
+    },
+    "close_period": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "write · 关账并写快照；顺序关账（早于该期且有分录的未关期间先拦）、不得关未来期间；同期间重复调用幂等（返回首次结果，不新增记录）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "APPEND_ONLY",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "reopen_period": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "behavior": "write · 重开最近一个已关期间（须理由）；隔着已关期间重开被拒；追加一条 reopen 记录，不覆盖历史",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "APPEND_ONLY",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "period_status": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 期间当前是否关账 + 最近动作（actor/note/时点/快照摘要）",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "period_report": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 关账快照 vs 当前复算逐科目核对；不一致返回 verified=false + diffs，不静默报「已关账」",
+      "error_codes": [
+        "INVALID_ARGUMENT",
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
+    },
+    "list_periods": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "behavior": "read · 列出有记录的期间与当前状态（期间升序）",
+      "error_codes": [
+        "TENANT_DENIED",
+        "SCHEMA_OUTDATED",
+        "UPSTREAM_UNAVAILABLE"
+      ]
     }
   },
   "tool_groups": [
@@ -560,6 +626,18 @@
         "list_posting_gaps"
       ],
       "description": "过账层：事件经版本化规则确定性映射为复式分录；规则须审批上线、同事件类型只允许一条 active、升版不重写历史分录。缺规则时不猜科目——事件挂入待补清单、账本余额不变。规则科目受机器车道白名单约束。"
+    },
+    {
+      "group": "period",
+      "level": "commercial",
+      "tools": [
+        "close_period",
+        "reopen_period",
+        "period_status",
+        "period_report",
+        "list_periods"
+      ],
+      "description": "期间关账：分录业务日期（booked_on）决定期间归属（与会话时区解耦）；close/reopen 只追加（无可变状态列），已关期间由数据库触发器拒绝落账；顺序关账、只重开最近一期且须理由；关账写快照（逐科目借/贷/净额/行数 + 借贷合计），可复算核对并在不一致时逐科目点名差额。"
     }
   ],
   "error_codes": {
@@ -583,6 +661,7 @@
       "EVENT_IMMUTABLE",
       "OBJECT_CONFLICT",
       "FX_UNSOURCED",
+      "PERIOD_CLOSED",
       "PROPOSAL_STATE",
       "EVENT_STATE",
       "EVENT_UNKNOWN_TYPE",
@@ -605,7 +684,7 @@
     "note": "32 工具一律 `动词_名词`（submit/list/confirm/reject/query/run/get/approve/bill/reverse/simulate/reserve/release/ingest/decide/project/post + 名词）；无历史遗留名词序工具需兼容。"
   },
   "registry": {
-    "expected_tool_count": 32
+    "expected_tool_count": 37
   },
   "output_structure": {
     "declared": [
@@ -618,7 +697,8 @@
       "query_events",
       "query_object_balance",
       "list_posting_rules",
-      "list_posting_gaps"
+      "list_posting_gaps",
+      "list_periods"
     ],
     "undeclared": [
       "submit_proposal",
@@ -642,7 +722,11 @@
       "project_event",
       "submit_posting_rule",
       "approve_posting_rule",
-      "post_event"
+      "post_event",
+      "close_period",
+      "reopen_period",
+      "period_status",
+      "period_report"
     ],
     "tool_fields": {
       "list_proposals": [
@@ -703,6 +787,11 @@
       "list_posting_gaps": [
         "data[]",
         "completeness{declared_total,returned,truncated,state}",
+        "rows_returned",
+        "ok"
+      ],
+      "list_periods": [
+        "data[]",
         "rows_returned",
         "ok"
       ]

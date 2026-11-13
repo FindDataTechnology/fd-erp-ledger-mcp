@@ -1,6 +1,6 @@
 {
   "schema": "erp-kernel-toolkit-catalog/v1",
-  "note": "本目录是 agent 侧说明书，不是新能力：工具面真源是同仓 tool-surface.json（32 件 / 8 组）。这里只回答四件事——这组工具能做什么、不许做什么、硬纪律是什么、哪类岗位能碰哪几件。catalog 里的 tools 必须与工具面逐名双向相等；工具面改动而本目录未跟进，scripts/check_toolkit.py 判红（提示补卡，而不是删工具）。",
+  "note": "本目录是 agent 侧说明书，不是新能力：工具面真源是同仓 tool-surface.json（37 件 / 9 组）。这里只回答四件事——这组工具能做什么、不许做什么、硬纪律是什么、哪类岗位能碰哪几件。catalog 里的 tools 必须与工具面逐名双向相等；工具面改动而本目录未跟进，scripts/check_toolkit.py 判红（提示补卡，而不是删工具）。",
   "surface": "../tool-surface.json",
   "roles": [
     {
@@ -71,12 +71,26 @@
         "reject_proposal"
       ],
       "tool_roles": {
-        "submit_proposal": ["analyst"],
-        "list_proposals": ["inspector", "analyst", "decider"],
-        "confirm_proposal": ["decider"],
-        "reject_proposal": ["decider"]
+        "submit_proposal": [
+          "analyst"
+        ],
+        "list_proposals": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "confirm_proposal": [
+          "decider"
+        ],
+        "reject_proposal": [
+          "decider"
+        ]
       },
-      "role_types": ["inspector", "analyst", "decider"],
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
       "discipline_ids": [
         "d1_agent_write_path",
         "d2_unknown_explicit",
@@ -117,10 +131,22 @@
         "query_entries"
       ],
       "tool_roles": {
-        "query_balance": ["inspector", "analyst", "decider"],
-        "query_entries": ["inspector", "analyst", "decider"]
+        "query_balance": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "query_entries": [
+          "inspector",
+          "analyst",
+          "decider"
+        ]
       },
-      "role_types": ["inspector", "analyst", "decider"],
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
       "discipline_ids": [
         "d1_agent_write_path",
         "d2_unknown_explicit",
@@ -157,10 +183,22 @@
         "get_recon_report"
       ],
       "tool_roles": {
-        "run_reconciliation": ["inspector", "analyst", "decider"],
-        "get_recon_report": ["inspector", "analyst", "decider"]
+        "run_reconciliation": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "get_recon_report": [
+          "inspector",
+          "analyst",
+          "decider"
+        ]
       },
-      "role_types": ["inspector", "analyst", "decider"],
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
       "discipline_ids": [
         "d1_agent_write_path",
         "d2_unknown_explicit",
@@ -204,17 +242,49 @@
         "bill_period_snapshot"
       ],
       "tool_roles": {
-        "submit_billing_rule": ["analyst", "decider"],
-        "approve_billing_rule": ["decider"],
-        "list_billing_rules": ["inspector", "analyst", "decider"],
-        "bill_event": ["analyst"],
-        "list_fees": ["inspector", "analyst", "decider"],
-        "get_fee_detail": ["inspector", "analyst", "decider"],
-        "reverse_fee": ["analyst", "decider"],
-        "simulate_billing": ["inspector", "analyst", "decider"],
-        "bill_period_snapshot": ["analyst"]
+        "submit_billing_rule": [
+          "analyst",
+          "decider"
+        ],
+        "approve_billing_rule": [
+          "decider"
+        ],
+        "list_billing_rules": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "bill_event": [
+          "analyst"
+        ],
+        "list_fees": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "get_fee_detail": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "reverse_fee": [
+          "analyst",
+          "decider"
+        ],
+        "simulate_billing": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "bill_period_snapshot": [
+          "analyst"
+        ]
       },
-      "role_types": ["inspector", "analyst", "decider"],
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
       "discipline_ids": [
         "d1_agent_write_path",
         "d2_unknown_explicit",
@@ -257,12 +327,29 @@
         "list_credit_reservations"
       ],
       "tool_roles": {
-        "reserve_credit": ["analyst"],
-        "release_credit": ["analyst", "decider"],
-        "query_credit": ["inspector", "analyst", "decider"],
-        "list_credit_reservations": ["inspector", "analyst", "decider"]
+        "reserve_credit": [
+          "analyst"
+        ],
+        "release_credit": [
+          "analyst",
+          "decider"
+        ],
+        "query_credit": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "list_credit_reservations": [
+          "inspector",
+          "analyst",
+          "decider"
+        ]
       },
-      "role_types": ["inspector", "analyst", "decider"],
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
       "discipline_ids": [
         "d1_agent_write_path",
         "d2_unknown_explicit",
@@ -301,12 +388,26 @@
         "query_events"
       ],
       "tool_roles": {
-        "ingest_event": ["analyst"],
-        "submit_event": ["analyst"],
-        "decide_event": ["decider"],
-        "query_events": ["inspector", "analyst", "decider"]
+        "ingest_event": [
+          "analyst"
+        ],
+        "submit_event": [
+          "analyst"
+        ],
+        "decide_event": [
+          "decider"
+        ],
+        "query_events": [
+          "inspector",
+          "analyst",
+          "decider"
+        ]
       },
-      "role_types": ["inspector", "analyst", "decider"],
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
       "discipline_ids": [
         "d1_agent_write_path",
         "d2_unknown_explicit",
@@ -347,10 +448,20 @@
         "project_event"
       ],
       "tool_roles": {
-        "query_object_balance": ["inspector", "analyst", "decider"],
-        "project_event": ["analyst"]
+        "query_object_balance": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "project_event": [
+          "analyst"
+        ]
       },
-      "role_types": ["inspector", "analyst", "decider"],
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
       "discipline_ids": [
         "d1_agent_write_path",
         "d2_unknown_explicit",
@@ -389,13 +500,32 @@
         "list_posting_gaps"
       ],
       "tool_roles": {
-        "submit_posting_rule": ["analyst", "decider"],
-        "approve_posting_rule": ["decider"],
-        "list_posting_rules": ["inspector", "analyst", "decider"],
-        "post_event": ["analyst"],
-        "list_posting_gaps": ["inspector", "analyst", "decider"]
+        "submit_posting_rule": [
+          "analyst",
+          "decider"
+        ],
+        "approve_posting_rule": [
+          "decider"
+        ],
+        "list_posting_rules": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "post_event": [
+          "analyst"
+        ],
+        "list_posting_gaps": [
+          "inspector",
+          "analyst",
+          "decider"
+        ]
       },
-      "role_types": ["inspector", "analyst", "decider"],
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
       "discipline_ids": [
         "d1_agent_write_path",
         "d2_unknown_explicit",
@@ -420,6 +550,92 @@
         {
           "what": "在规则里放白名单外的科目，尤其是资金池/代收代付/分账执行类",
           "why": "机器车道科目受 POSTING_ACCOUNTS 白名单约束（不含现金/预收/权益）；白名单外的科目提交即拒，资金类科目属二清红线。"
+        }
+      ]
+    },
+    {
+      "id": "period",
+      "title_zh": "期间关账（period）",
+      "level": "commercial",
+      "tools": [
+        "close_period",
+        "reopen_period",
+        "period_status",
+        "period_report",
+        "list_periods"
+      ],
+      "tool_roles": {
+        "close_period": [
+          "decider"
+        ],
+        "reopen_period": [
+          "decider"
+        ],
+        "period_status": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "period_report": [
+          "inspector",
+          "analyst",
+          "decider"
+        ],
+        "list_periods": [
+          "inspector",
+          "analyst",
+          "decider"
+        ]
+      },
+      "role_types": [
+        "inspector",
+        "analyst",
+        "decider"
+      ],
+      "discipline_ids": [
+        "d1_agent_write_path",
+        "d2_unknown_explicit",
+        "d3_object_balance_not_writable",
+        "d4_posting_requires_approved_rule",
+        "d5_fund_accounts_red_line"
+      ],
+      "can_do_zh": [
+        "把某个会计期间关账：写死「这一期的数字已经报出去了」，并留下逐科目借/贷/净额与行数的快照",
+        "按快照复算核对：一致说 verified=true，不一致逐科目点名差额（不静默报「已关账」）",
+        "重开最近一期（必须给理由），让更正能在开放期间落账"
+      ],
+      "cannot_do_zh": [
+        "不能改已落账分录（append-only；更正只走冲正）",
+        "不能把分录塞进已关期间（数据库触发器拒绝，绕应用层也一样）",
+        "不能隔着已关期间重开更早的一期（先关后期再改前期会让已报出的后一期失去依据）",
+        "不能删除或改写关账记录（追加式，当前状态只由最后一条 close/reopen 决定）"
+      ],
+      "hard_rules_zh": [
+        "期间由**业务日期** booked_on 决定，不取落账时刻；booked_on 是 DATE，与连接时区无关",
+        "关账顺序进行：早于本期且有分录的期间必须先关，否则拒并点名最早的未关期间",
+        "重开只认最近一个已关期间，且必须带非空理由"
+      ],
+      "when_to_use_zh": "月结/期末要「把这一期的数定下来」时：先 period_status 看关没关，close_period 关账并写快照；之后任何业务日期落在该期的分录都会被拒——要补录就先 reopen_period（带理由）再落账，落完再关。period_report 用快照与复算对一遍，确认「当时报出去的」和现在一致。",
+      "forbidden": [
+        {
+          "what": "往已关期间补录分录（包括「只是补一张小单」）",
+          "why": "已关期间就是「这期的数已经报出去了」。补录被数据库触发器拒绝；要改就先重开（留理由），否则已报出的报表与账面就永久对不上，而且没人知道是哪次补录造成的。"
+        },
+        {
+          "what": "把 business 日期当摆设：用确认时刻决定期间归属",
+          "why": "业务日期 booked_on 是期间归属的唯一依据。用落账时刻的话，10 月的单据 11 月确认就算进 11 月，同一张 10 月利润表会随确认时点变化，而两次都「自洽」。"
+        },
+        {
+          "what": "改/删关账记录来「修正状态」",
+          "why": "accounting_periods 追加式（UPDATE/DELETE 被拒），当前状态只由最后一条 close/reopen 决定；能改就先例，事后无法证明当时报的是哪版。"
+        },
+        {
+          "what": "隔着已关期间重开更早的一期，或跳过未关期间先关后期",
+          "why": "先关后期再回头改前期，会让已报出的后一期数字失去前期依据；顺序关账与「只重开最近一期」正是为此。"
+        },
+        {
+          "what": "period_report 返回 verified=false 时仍按「已关账」对外报数",
+          "why": "快照与复算不一致说明账被动过（或关账逻辑有 bug）。此时正确处置是列出差异科目查账，而不是把一份对不上的报表当定稿。"
         }
       ]
     }

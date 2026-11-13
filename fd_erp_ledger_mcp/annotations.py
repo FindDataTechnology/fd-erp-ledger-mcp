@@ -46,6 +46,13 @@ _ANNOTATIONS: dict[str, dict[str, Any]] = {
     "list_posting_rules":   {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
     "post_event":           {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
     "list_posting_gaps":    {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    # 期间关账（change: add-period-close）——关账改写「哪期已报出」，属破坏性；
+    # 重开同样是破坏性（会放开已关期间）。读面（状态/清单）只读。
+    "close_period":         {"readOnlyHint": False, "destructiveHint": True,  "idempotentHint": True,  "openWorldHint": False},
+    "reopen_period":        {"readOnlyHint": False, "destructiveHint": True,  "idempotentHint": False, "openWorldHint": False},
+    "period_status":        {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "period_report":        {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "list_periods":         {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
 }
 
 

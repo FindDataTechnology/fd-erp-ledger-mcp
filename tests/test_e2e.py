@@ -26,11 +26,12 @@ EXPECTED_TOOLS = {
     "query_object_balance", "project_event",
     "submit_posting_rule", "approve_posting_rule", "list_posting_rules",
     "post_event", "list_posting_gaps",
+    "close_period", "reopen_period", "period_status", "period_report", "list_periods",
 }
 
 
 def test_create_server_zero_config_lists_full_tool_surface():
-    """零配置 create_server 可握手；工具面恰为契约 32 个。"""
+    """零配置 create_server 可握手；工具面恰为契约 37 个。"""
     from fd_erp_ledger_mcp.server import create_server
     server = create_server(Settings(database_url=None))
 
@@ -42,7 +43,7 @@ def test_create_server_zero_config_lists_full_tool_surface():
     import asyncio
     names = asyncio.run(go())
     assert names == EXPECTED_TOOLS
-    assert len(EXPECTED_TOOLS) == 32
+    assert len(EXPECTED_TOOLS) == 37
 
 
 def test_tool_layer_rows_returned_stamp(settings):
