@@ -26,10 +26,13 @@ from __future__ import annotations
 import hmac
 import os
 
+from . import wellknown
+
 ENV_TOKEN = "MCP_BEARER_TOKEN"
 
-#: 免门路径：探针、运维指标、以及家族里约定的 /healthz。数据面 /mcp 刻意不在其中。
-EXEMPT_PATHS = ("/health", "/healthz", "/metrics")
+#: 免门路径：探针、运维指标、家族约定的 /healthz，以及**线自描述端点**（规格要求它
+#: 匿名可读，否则第三方无法发现本线）。数据面 /mcp 刻意不在其中。
+EXEMPT_PATHS = ("/health", "/healthz", "/metrics", wellknown.WELL_KNOWN_PATH)
 
 
 def configured_token() -> str:
