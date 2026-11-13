@@ -113,6 +113,33 @@ def test_candidate_chain_finds_repo_manifest_from_any_cwd(tmp_path, monkeypatch)
     assert wellknown.manifest_path() == REPO_MANIFEST
 
 
+def test_resolution_scans_past_a_missing_first_candidate(tmp_path, monkeypatch):
+    """镜像实况（2026-11-13 生产实测的 404）：console script 启动时 `sys.path[0]` 是
+    `/usr/local/bin`，`import fd_erp_ledger_mcp` 命中 **site-packages 的副本**，于是
+    `parents[1]` 指向 site-packages（那里没有清单），而清单在 `WORKDIR=/app`。
+    只取首选档 ⇒ 端点永久 404，同族其余线都是扫存在性版本。
+
+    这里照搬那个布局：包在 fake site-packages 下，清单只在 CWD。
+    """
+    monkeypatch.delenv(wellknown.ENV_MANIFEST_PATH, raising=False)
+    site = tmp_path / "site-packages" / "fd_erp_ledger_mcp"
+    site.mkdir(parents=True)
+    cwd = tmp_path / "app"
+    cwd.mkdir()
+    manifest = cwd / "line-manifest.json"
+    manifest.write_bytes(REPO_MANIFEST.read_bytes())
+
+    monkeypatch.setattr(wellknown, "__file__", str(site / "wellknown.py"))
+    monkeypatch.chdir(cwd)
+
+    assert not (tmp_path / "site-packages" / "line-manifest.json").exists()
+    assert wellknown.manifest_candidates()[0].parent == site.parent  # 首选档确实扑空
+    assert wellknown.manifest_path() == manifest                # 但必须扫到 CWD 那档
+    status, body, _ = wellknown.manifest_response()
+    assert status == 200
+    assert body == REPO_MANIFEST.read_bytes()
+
+
 @pytest.mark.parametrize("token", ["", "t0ken"])
 def test_route_is_anonymous_behind_the_token_guard(monkeypatch, token):
     """真装配：配了共享令牌时 /mcp 401，而自描述端点仍匿名 200 且字节相同。"""
