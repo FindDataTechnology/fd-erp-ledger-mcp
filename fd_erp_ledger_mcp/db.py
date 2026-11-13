@@ -63,7 +63,10 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 0020：通用科目补附加税与所得税四科目（change: add-cn-surcharge-and-income-tax）——
 #:       2221.11 应交企业所得税 / 2221.12 城建税 / 2221.13 教育费附加 / 2221.14 地方教育附加。
 #:       没有它们，附加税只能挤进「其他经营费用」（报表项目对不上），所得税无处可挂。
-REQUIRED_SCHEMA_VERSION = "0020_cn_surcharge_accounts"
+#: 0021：通用科目补进项税额转出（change: add-cn-red-letter-and-input-transfer-out）——
+#:       2221.01.04 应交增值税（进项税额转出）。已抵扣进项在集体福利/非正常损失/免税或简易
+#:       计税时须转出；没有该科目，应纳增值税写不成「销项 − 进项 + 转出」，附加税基数跟着错。
+REQUIRED_SCHEMA_VERSION = "0021_cn_input_transfer_out_account"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
