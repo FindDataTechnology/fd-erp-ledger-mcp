@@ -48,8 +48,9 @@ def register(mcp: FastMCP, settings: Settings) -> None:
     ) -> dict[str, Any]:
         """提交拟落账事件（proposal），不直接改变账本状态；同 stable_id 重复提交返回首次结果。
 
-        `dimensions` 可选：键为封闭集（department/project/channel/cost_center/entity），
-        值为自由字符串；确认后逐行带进分录。不传即「未标注维度」，不补默认值。
+        `dimensions` 可选：键为封闭集（department/project/channel/cost_center/entity/
+        customer/production_order），值为自由字符串；确认后逐行带进分录。
+        不传即「未标注维度」，不补默认值。
         """
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)

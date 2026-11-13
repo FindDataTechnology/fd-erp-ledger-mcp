@@ -97,7 +97,7 @@ def test_universal_accounts_preset_seeded(settings):
     for _code, _name, _name_en, atype in rows:
         by_type.setdefault(atype, []).append(_code)
     assert set(by_type) == {"asset", "liability", "equity", "revenue", "expense"}
-    assert len(rows) == 17  # 7 资产（含 1602 累计折旧、1231 坏账准备两项抵减） + 2 负债 + 2 权益 + 1 收入 + 5 费用
+    assert len(rows) == 18  # 8 资产（含 1602 累计折旧、1231 坏账准备两项抵减、1401 生产成本） + 2 负债 + 2 权益 + 1 收入 + 5 费用
     assert by_type["revenue"] == ["4000"]  # 收入唯一内核科目，行业细目走映射
 
 
@@ -107,10 +107,10 @@ def test_seed_universal_accounts_idempotent(settings):
     conn = psycopg.connect(settings.database_url, autocommit=True)
     try:
         first = seed_universal_accounts(conn, "seed-t1")
-        assert first["seeded"] == 17
+        assert first["seeded"] == 18
         again = seed_universal_accounts(conn, "seed-t1")
         assert again["seeded"] == 0  # 幂等：零新增
-        assert again["universal_present"] == 17
+        assert again["universal_present"] == 18
         types = dict(conn.execute(
             "SELECT code, account_type FROM accounts WHERE tenant_id='seed-t1' "
             "AND code IN (SELECT code FROM universal_accounts)").fetchall())
@@ -139,7 +139,7 @@ def test_fixed_assets_accounts_present(settings):
         conn.execute(sql)
         conn.execute(sql)
         total = conn.execute("SELECT COUNT(*) FROM universal_accounts").fetchone()[0]
-        assert total == 17
+        assert total == 18
     finally:
         conn.close()
 
@@ -177,4 +177,25 @@ def test_0016_fx_account_in_preset(settings):
         conn.close()
     assert [(c, t) for c, t, _ in rows] == [("6603", "expense")]
     assert "期末汇率" in (rows[0][2] or "")
+    assert total == 1
+
+
+def test_0017_wip_account_in_preset(settings):
+    """0017：1401 生产成本在预设里（在制品；领料借记、完工贷记）。"""
+    from fd_erp_ledger_mcp.universal_accounts import seed_universal_accounts
+    conn = psycopg.connect(settings.database_url, autocommit=True)
+    try:
+        seed_universal_accounts(conn, "seed-0017")
+        rows = conn.execute(
+            "SELECT code, account_type, note FROM universal_accounts"
+            " WHERE code = '1401'").fetchall()
+        sql = (MIGRATIONS_DIR / "0017_wip_account.sql").read_text(encoding="utf-8")
+        conn.execute(sql)
+        conn.execute(sql)
+        total = conn.execute(
+            "SELECT COUNT(*) FROM universal_accounts WHERE code = '1401'").fetchone()[0]
+    finally:
+        conn.close()
+    assert [(c, t) for c, t, _ in rows] == [("1401", "asset")]
+    assert "在制品" in (rows[0][2] or "")
     assert total == 1

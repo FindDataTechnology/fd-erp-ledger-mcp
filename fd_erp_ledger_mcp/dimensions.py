@@ -26,8 +26,10 @@ from .errors import ErpError
 #:
 #: `customer`：应收/收入的主分析轴——「谁欠我、欠多久」与「谁贡献的收入」都靠它
 #: （change: add-receivable-aging）。
+#: `production_order`：在制品的主分析轴——领料归集与完工转出都打同一个工单号，
+#: 「这个工单还剩多少在制品」只能按它汇总 1401（change: add-manufacturing-orders）。
 DIMENSION_KEYS = ("department", "project", "channel", "cost_center", "entity",
-                  "customer")
+                  "customer", "production_order")
 
 #: 单条提案的维度键上限（一次落账不该按七八个维度切）。
 MAX_DIMENSION_KEYS = 6
