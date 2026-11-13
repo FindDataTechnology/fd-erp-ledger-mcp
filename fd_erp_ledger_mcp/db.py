@@ -47,7 +47,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #:       booked_on 是 DATE 而非 timestamptz：期间归属因此与会话时区彻底解耦（0010 的教训）。
 #: 0015：通用科目补坏账准备 1231（抵减应收）与信用减值损失 6602
 #:       （change: add-bad-debt-provision）。纯追加 + 幂等，无数据迁移。
-REQUIRED_SCHEMA_VERSION = "0015_bad_debt_accounts"
+REQUIRED_SCHEMA_VERSION = "0016_fx_accounts"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
