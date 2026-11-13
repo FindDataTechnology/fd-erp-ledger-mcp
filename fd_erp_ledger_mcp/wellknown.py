@@ -46,7 +46,20 @@ def manifest_candidates() -> list[Path]:
 
 
 def manifest_path() -> Path:
-    return manifest_candidates()[0]
+    """实际取用的清单路径；**逐档扫存在性**，都不存在时返回首选位置（让 404 能点名期望路径）。
+
+    必须扫，不能只取首选档：镜像里是 **console script 启动**，``sys.path[0]`` 是
+    ``/usr/local/bin``，``import fd_erp_ledger_mcp`` 命中 **site-packages 的那份副本**，
+    于是 ``here.parents[1]`` 指向 site-packages（那里没有清单），而清单在
+    ``WORKDIR=/app/line-manifest.json``。只取首选档 ⇒ 端点永久 404，且构建期的
+    ``test -s`` 断言照样是绿的（2026-11-13 实测：pod 内 404/40 B，而 ``/app`` 下 4893 B 就在）。
+    同族其余线路都是扫存在性版本，此处是对齐，不是新发明。
+    """
+    candidates = manifest_candidates()
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 def manifest_response() -> tuple[int, bytes, dict[str, str]]:
