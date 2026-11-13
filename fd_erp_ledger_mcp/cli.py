@@ -37,8 +37,30 @@ def serve(host: str, port: int, transport: str, skip_schema_check: bool) -> None
     server = create_server(settings)
     if transport == "stdio":
         server.run(transport="stdio")
-    else:
-        server.run(transport=transport, host=host, port=port)
+        return
+
+    # change converge-line-identity-and-keys 8.5：配了共享令牌就挂门，未配则与接入前
+    # 逐字节一致（`middleware=None` 时 http_app 不装任何中间件）。`/health` 与
+    # `/metrics` 在 auth.EXEMPT_PATHS 里永远豁免——前者是 liveness 的唯一判据，后者是
+    # ops-console 直连 ClusterIP 抓取的看板数据源，两者都不经网关、不带钥匙。
+    from . import auth
+
+    middleware = None
+    if auth.configured_token():
+        from starlette.middleware import Middleware
+
+        middleware = [Middleware(auth.BearerAuthMiddleware)]
+
+    # 路径与 `server.run(transport=...)` 的默认值对齐：http 走 /mcp，sse 走 /sse。
+    app = server.http_app(
+        path="/sse" if transport == "sse" else "/mcp",
+        middleware=middleware,
+        transport="sse" if transport == "sse" else "http",
+    )
+
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 @cli.command()
