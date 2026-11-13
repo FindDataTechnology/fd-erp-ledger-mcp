@@ -39,6 +39,14 @@ def serve(host: str, port: int, transport: str, skip_schema_check: bool) -> None
         server.run(transport="stdio")
         return
 
+    # 线自描述端点（change converge-line-identity-and-keys 1.4；规格第 23 行要求两处运行时
+    # 投影——`/.well-known/line-manifest.json` 与注册表 `metadata.identity`——本线此前
+    # 只有后者）。必须在 `http_app()` **之前**挂：它走 FastMCP 的 custom_route，路由属于
+    # 应用本身，配/未配令牌两个分支都要能命中。
+    from . import wellknown
+
+    wellknown.register(server)
+
     # change converge-line-identity-and-keys 8.5：配了共享令牌就挂门，未配则与接入前
     # 逐字节一致（`middleware=None` 时 http_app 不装任何中间件）。`/health` 与
     # `/metrics` 在 auth.EXEMPT_PATHS 里永远豁免——前者是 liveness 的唯一判据，后者是

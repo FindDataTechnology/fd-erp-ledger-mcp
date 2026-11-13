@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from fd_erp_ledger_mcp import auth
+from fd_erp_ledger_mcp import auth, wellknown
 from fd_erp_ledger_mcp.config import Settings
 from fd_erp_ledger_mcp.server import create_server
 
@@ -28,8 +28,8 @@ pytestmark = pytest.mark.no_db
 
 #: 数据面：必须被门挡。
 DATA_PATH = "/mcp"
-#: 豁免面：探针 / 家族约定 / 运维看板。
-EXEMPT = ("/health", "/healthz", "/metrics")
+#: 豁免面：探针 / 家族约定 / 运维看板 / 线自描述端点（1.4 补的第二处投影）。
+EXEMPT = ("/health", "/healthz", "/metrics", wellknown.WELL_KNOWN_PATH)
 
 
 def _app(monkeypatch, token: str):
@@ -39,6 +39,8 @@ def _app(monkeypatch, token: str):
 
     monkeypatch.setenv(auth.ENV_TOKEN, token)
     server = create_server(Settings(database_url=None))
+    # 与 cli.serve() 同序：自描述端点在 http_app() 之前挂（1.4 的第二处投影）。
+    wellknown.register(server)
     middleware = [Middleware(auth.BearerAuthMiddleware)] if auth.configured_token() else None
     return server.http_app(path=DATA_PATH, middleware=middleware, transport="http")
 
@@ -152,6 +154,13 @@ def test_serve_wires_middleware_only_when_token_configured(monkeypatch):
         def run(self, **kw):  # pragma: no cover - 走 http 分支时不该被调用
             raise AssertionError("配了令牌还走 run()：中间件没接上")
 
+        def custom_route(self, path, methods=None):  # 真 FastMCP 有；1.4 的自描述端点要用
+            def deco(fn):
+                captured.setdefault("custom_routes", []).append(path)
+                return fn
+
+            return deco
+
         def http_app(self, **kw):
             captured.update(kw)
             return object()
@@ -169,6 +178,7 @@ def test_serve_wires_middleware_only_when_token_configured(monkeypatch):
     serve.callback(host="127.0.0.1", port=8000, transport="http", skip_schema_check=True)
 
     assert captured["path"] == "/mcp"
+    assert captured.get("custom_routes") == [wellknown.WELL_KNOWN_PATH]
     assert captured["middleware"] and captured["middleware"], "配了令牌却没接中间件"
     assert "uvicorn" in captured
     assert uvicorn is not None
@@ -181,6 +191,13 @@ def test_serve_without_token_keeps_old_shape(monkeypatch):
     class _FakeServer:
         def run(self, **kw):  # pragma: no cover
             raise AssertionError
+
+        def custom_route(self, path, methods=None):
+            def deco(fn):
+                captured.setdefault("custom_routes", []).append(path)
+                return fn
+
+            return deco
 
         def http_app(self, **kw):
             captured.update(kw)
