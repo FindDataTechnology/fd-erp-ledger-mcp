@@ -10,13 +10,22 @@
   },
   "auth_tracks": [
     {
+      "kind": "line-native",
+      "name": "mcp-bearer-token",
+      "accepts": "line-native-key",
+      "fallback": true,
+      "enforced": true,
+      "migration_task": "converge-line-identity-and-keys#8.5",
+      "note": "线自有共享钥匙（`MCP_BEARER_TOKEN`），**已在运行路径生效**（2026-11-13 落门，change converge-line-identity-and-keys 8.5；机制与其余七条线同族）。门在 `fd_erp_ledger_mcp/auth.py`：恒时比较、每请求重读、lifespan 放行；**豁免面是三条**——`/health`（liveness 的唯一判据）、`/metrics`（ops-console 直连 ClusterIP 抓的看板数据源，写死 `10.43.146.146/metrics`）、`/healthz`（本线没有这条路由，按家族约定一并豁免）；数据面 `/mcp` 不在豁免里。翻转两步：① 注册表该 server 行 `auth_scheme=bearer` + `auth_credential`=同一把令牌，出口由 auth-server 把 `Authorization` **换成**它 → ② 线侧 Secret `fd-erp-ledger-line-token` 注入 `MCP_BEARER_TOKEN` 并滚版。**爆炸半径已核**：唯一经网关的消费者是 paas `platform` 的 `fd-erp-ledger-mcp` 条目（`credentialRef: registry`，走 `https://mcp.finddatatech.cloud/...`），由后端注入覆盖；`erp-daily-billing` 是同镜像内 CLI（`bill-period`），不过 HTTP；`ops-console` 只直连 `/health` 与 `/metrics`（都在豁免面）。**这就是 fallback 轨**：摘掉壹座后，持有该令牌的客户仍能直接消费本线。⚠️ 共享钥匙**不承载租户/客户身份**——跨租户拒绝与审计留痕仍由本线代码按调用身份做，每客户一把钥匙属词元轨（见 `ciyuan-sk` 那条的 `migration_task`）。"
+    },
+    {
       "kind": "customer-key",
       "name": "ciyuan-sk",
       "accepts": "ciyuan-sk",
       "fallback": false,
       "enforced": false,
       "migration_task": "converge-line-identity-and-keys#8.5",
-      "note": "未接：本仓不解析任何入站凭据，词元客户钥匙今天打进来也只是被当作不存在。客户现在的实际路径是「平台 registry 凭据经网关代调」——那是第三方/平台中介，不是本线的钥匙轨。"
+      "note": "未接：本线**已有**入站凭据校验（`MCP_BEARER_TOKEN` 共享 bearer 门，见 `mcp-bearer-token` 那条），但**不解析**词元钥匙——`ciyuan-sk` 打进来会被当成不匹配的 bearer 而 401，不是被当作不存在。客户现在的实际路径是「平台 registry 凭据经网关代调」（第三方/平台中介）。要真接词元轨，须有词元校验面（验签/换票）+ 由它给出的客户身份，属 8.3 建立机制后的工作。"
     }
   ],
   "scopes": [
