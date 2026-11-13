@@ -97,7 +97,7 @@ def test_universal_accounts_preset_seeded(settings):
     for _code, _name, _name_en, atype in rows:
         by_type.setdefault(atype, []).append(_code)
     assert set(by_type) == {"asset", "liability", "equity", "revenue", "expense"}
-    assert len(rows) == 14  # 6 资产（含 1602 累计折旧抵减） + 2 负债 + 2 权益 + 1 收入 + 3 费用
+    assert len(rows) == 16  # 7 资产（含 1602 累计折旧、1231 坏账准备两项抵减） + 2 负债 + 2 权益 + 1 收入 + 4 费用
     assert by_type["revenue"] == ["4000"]  # 收入唯一内核科目，行业细目走映射
 
 
@@ -107,10 +107,10 @@ def test_seed_universal_accounts_idempotent(settings):
     conn = psycopg.connect(settings.database_url, autocommit=True)
     try:
         first = seed_universal_accounts(conn, "seed-t1")
-        assert first["seeded"] == 14
+        assert first["seeded"] == 16
         again = seed_universal_accounts(conn, "seed-t1")
         assert again["seeded"] == 0  # 幂等：零新增
-        assert again["universal_present"] == 14
+        assert again["universal_present"] == 16
         types = dict(conn.execute(
             "SELECT code, account_type FROM accounts WHERE tenant_id='seed-t1' "
             "AND code IN (SELECT code FROM universal_accounts)").fetchall())
@@ -139,6 +139,20 @@ def test_fixed_assets_accounts_present(settings):
         conn.execute(sql)
         conn.execute(sql)
         total = conn.execute("SELECT COUNT(*) FROM universal_accounts").fetchone()[0]
-        assert total == 14
+        assert total == 16
     finally:
         conn.close()
+
+
+def test_0015_bad_debt_accounts_in_preset(settings):
+    """0015：1231 坏账准备 / 6602 信用减值损失在预设里（报表净额与费用口径依赖它们）。"""
+    from fd_erp_ledger_mcp.universal_accounts import seed_universal_accounts
+    conn = psycopg.connect(settings.database_url, autocommit=True)
+    try:
+        seed_universal_accounts(conn, "seed-0015")
+        rows = conn.execute(
+            "SELECT code, account_type FROM universal_accounts"
+            " WHERE code IN ('1231', '6602') ORDER BY code").fetchall()
+    finally:
+        conn.close()
+    assert [(c, t) for c, t in rows] == [("1231", "asset"), ("6602", "expense")]

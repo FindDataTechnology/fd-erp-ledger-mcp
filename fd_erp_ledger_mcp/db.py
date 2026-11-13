@@ -45,7 +45,9 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #:       booked_on DATE（历史行按显式 Asia/Shanghai 从 posted_at 回填），accounting_periods
 #:       追加式期间台账（close/reopen + 关账快照），journal_entries 落账闸（已关期间拒收）。
 #:       booked_on 是 DATE 而非 timestamptz：期间归属因此与会话时区彻底解耦（0010 的教训）。
-REQUIRED_SCHEMA_VERSION = "0014_period_close"
+#: 0015：通用科目补坏账准备 1231（抵减应收）与信用减值损失 6602
+#:       （change: add-bad-debt-provision）。纯追加 + 幂等，无数据迁移。
+REQUIRED_SCHEMA_VERSION = "0015_bad_debt_accounts"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
