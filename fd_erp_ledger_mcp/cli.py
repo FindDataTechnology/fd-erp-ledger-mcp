@@ -47,14 +47,14 @@ def serve(host: str, port: int, transport: str, skip_schema_check: bool) -> None
 
     wellknown.register(server)
 
-    # change converge-line-identity-and-keys 8.5：配了共享令牌就挂门，未配则与接入前
-    # 逐字节一致（`middleware=None` 时 http_app 不装任何中间件）。`/health` 与
-    # `/metrics` 在 auth.EXEMPT_PATHS 里永远豁免——前者是 liveness 的唯一判据，后者是
-    # ops-console 直连 ClusterIP 抓取的看板数据源，两者都不经网关、不带钥匙。
+    # change converge-line-identity-and-keys 8.5：共享令牌**或**词元轨任一配了就挂门，
+    # 两者都未配则与接入前逐字节一致（`middleware=None` 时 http_app 不装任何中间件）。
+    # `/health` 与 `/metrics` 在 auth.EXEMPT_PATHS 里永远豁免——前者是 liveness 的唯一
+    # 判据，后者是 ops-console 直连 ClusterIP 抓取的看板数据源，两者都不经网关、不带钥匙。
     from . import auth
 
     middleware = None
-    if auth.configured_token():
+    if auth.gate_enabled():
         from starlette.middleware import Middleware
 
         middleware = [Middleware(auth.BearerAuthMiddleware)]

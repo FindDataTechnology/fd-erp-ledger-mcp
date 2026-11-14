@@ -17,6 +17,10 @@ dependencies = [
     "psycopg[binary,pool]>=3.1",
     # 运行指标（optimize-erp-solution 6.1）：/metrics 用 prometheus_client 暴露
     "prometheus_client>=0.20",
+    # 门 K 词元轨的离线验签（change converge-line-identity-and-keys 8.5）：
+    # `line-token-exchange` 发的是 ES256/RS256 的 JWT，pyjwt[crypto] 才有算法实现。
+    # 与 fd-lex / fd-wire 同一条依赖，别在这里自造校验器。
+    "pyjwt[crypto]>=2.8",
 ]
 
 [project.optional-dependencies]
