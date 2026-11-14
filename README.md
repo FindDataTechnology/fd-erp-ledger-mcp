@@ -252,6 +252,27 @@ ERP_LEDGER_DATABASE_URL="postgresql://..." .venv/bin/pytest -q
 测试需真实 Postgres（DB 约束层不可 mock）；三层兜底：约束层、车道层、幂等层，
 外加 proposal→确认→落账→余额→对账→冲正全链 e2e，以及计费（规则审批/冲突拦截/
 幂等/快照重算/红冲/溯源/试算）与信用（占用释放/额度拦截/账本衍生口径）套件。
+
+本机没有现成实例时，起一个一次性测试集群（**数据目录别放 /tmp**——按日期清
+/tmp 的脚本会把它连文件带锁一起删掉，跑着的 postmaster 当场
+`could not open file "global/…"` 自杀，所有用例报 `PoolTimeout`，2026-11-15 实历）：
+
+```bash
+PGBIN=/opt/homebrew/opt/postgresql@17/bin   # 或本机安装的 pg bin
+$PGBIN/initdb -D ~/.erp-pg-55432 --auth=trust
+$PGBIN/pg_ctl -D ~/.erp-pg-55432 -o "-p 55432 -c listen_addresses=127.0.0.1" \
+              -l ~/.erp-pg-55432/server.log -w start
+$PGBIN/createdb -h 127.0.0.1 -p 55432 -U "$(whoami)" erp_test
+export ERP_LEDGER_DATABASE_URL="postgresql://postgres@127.0.0.1:55432/erp_test"
+```
+
+两个坑：① `initdb` 的超管是本机用户名，DSN 里写 `postgres` 会报
+`role "postgres" does not exist`——先
+`$PGBIN/psql -h 127.0.0.1 -p 55432 -U "$(whoami)" -d postgres -c "CREATE ROLE postgres SUPERUSER LOGIN"`；
+② `createdb`/`psql` 不带 `-d` 时默认连与用户同名的库，报
+`database "<user>" does not exist` 不代表服务器没起来。
+
+
 计费补强与运维加固另有专项验收：
 
 - `tests/test_billing_e2e.py`：一条真库用例串起「事件计费 → 日终快照计费 → 确认门
