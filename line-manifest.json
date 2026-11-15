@@ -14,7 +14,7 @@
       "accepts": "line-native-key",
       "fallback": true,
       "enforced": true,
-      "migration_task": "converge-line-identity-and-keys#8.5"
+      "migration_task": "converge-line-identity-and-keys#8.6"
     },
     {
       "kind": "customer-key",
@@ -22,7 +22,7 @@
       "accepts": "ciyuan-sk",
       "fallback": false,
       "enforced": false,
-      "migration_task": "converge-line-identity-and-keys#8.5"
+      "migration_task": "converge-line-identity-and-keys#8.3"
     }
   ],
   "scopes": [
