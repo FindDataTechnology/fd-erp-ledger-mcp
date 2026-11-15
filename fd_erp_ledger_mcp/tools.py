@@ -45,12 +45,19 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         tenant_id: str | None = None,
         dimensions: dict[str, str] | None = None,
         submitted_by: str = "agent",
+        booked_on: str | None = None,
     ) -> dict[str, Any]:
         """提交拟落账事件（proposal），不直接改变账本状态；同 stable_id 重复提交返回首次结果。
 
         `dimensions` 可选：键为封闭集（department/project/channel/cost_center/entity/
         customer/production_order），值为自由字符串；确认后逐行带进分录。
         不传即「未标注维度」，不补默认值。
+
+        `booked_on` 可选：**业务记账日**（`YYYY-MM-DD`），不是受理时刻。模板层按业务
+        日期归期（期初/结账/红冲/汇兑重估等都由模板算出 `day` 再传），不传则由内核按
+        事件时刻推。`_submit` 一直支持它，但**工具面此前没声明** ⇒ MCP 形态下模板的
+        `_kernel.submit_proposal(..., booked_on=day)` 直接 `TypeError`（14 处调用点跨
+        9 个模板），而同进程形态一直正常——与 `ingest_event.provenance` 同族。
         """
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)
@@ -59,7 +66,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                            kind=kind, reversal_of=reversal_of,
                            lane_fleet=lane_fleet, lane_post=lane_post,
                            lane_title=lane_title, lane_target=lane_target,
-                           dimensions=dimensions,
+                           dimensions=dimensions, booked_on=booked_on,
                            submitted_by=submitted_by)
 
     # ---- 2. list_proposals ----
@@ -417,6 +424,7 @@ def register(mcp: FastMCP, settings: Settings) -> None:
         occurred_at: str,
         payload: dict[str, Any],
         source_ref: str | None = None,
+        provenance: dict[str, Any] | None = None,
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """写入来自外部系统的原始事实（导入车道）。
@@ -426,13 +434,21 @@ def register(mcp: FastMCP, settings: Settings) -> None:
 
         occurred_at 是**事实发生时点**（不是写入时点），ISO-8601 字符串。
         载荷字段确实未知时写 "__unknown__"，不要写空串——空串会被读成"没有"。
+
+        `provenance` 是**来源留痕**（谁/哪个外部系统报来这一条：供应商到货预告带
+        `source` / `arrival_ref` / `po_ref` / `requested_by`），随事件落库供审计回溯。
+        `_events.append_event` 一直支持它，但**工具面此前没声明** ⇒ MCP 形态调用
+        带 provenance 会被 pydantic 判 `unexpected_keyword_argument`（2026-11-15
+        生产实测：模板层到货预告在 MCP 形态 `ToolError` 直上 500，而同进程形态
+        一直正常——两种传输形态分叉，正是本工具面该补的一格）。
         """
         with connection(settings) as conn:
             tenant = resolve_tenant(conn, settings, tenant_id)
             return _events.append_event(
                 conn, settings=settings, tenant_id=tenant, event_type=event_type,
                 stable_id=stable_id, occurred_at=occurred_at, payload=payload,
-                lane="ingest", source_ref=source_ref, actor="ingest-lane")
+                lane="ingest", source_ref=source_ref, provenance=provenance,
+                actor="ingest-lane")
 
     # ---- 23. submit_event：agent 拟稿，未确认不算事实 ----
     @mcp.tool(annotations=annotations_for("submit_event"))
