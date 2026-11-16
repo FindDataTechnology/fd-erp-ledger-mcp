@@ -27,6 +27,12 @@ from typing import Any
 from prometheus_client import (CONTENT_TYPE_LATEST, CollectorRegistry, Counter,
                                Histogram, generate_latest)
 
+#: 桶集**只许 import**，不许在本文件手写字面量（change 3.5）：真源在
+#: `fd-erp/shared/semantics-contract.json` 的 `metrics.canonical`，由
+#: `fd-erp/tools/gen_metrics_buckets.py` 生成到本仓；两侧原先各自手写，api 侧少一个
+#: 10.0 上界而两边各自都自洽 —— 只有跨服务比才看得出。`check_semantics_contract.py` 会拦住手写。
+from ._buckets_generated import SECONDS_BUCKETS
+
 #: 独立 registry：不污染 prometheus_client 默认 PROCESS/PLATFORM 收集器，
 #: 也让 `/metrics` 输出可预测（测试能断言"没有预期外的敏感标签"）。
 REGISTRY = CollectorRegistry(auto_describe=True)
@@ -92,7 +98,7 @@ TOOL_LATENCY = Histogram(
     "erp_tool_latency_seconds",
     "工具调用时延（秒）",
     ["tool"], registry=REGISTRY,
-    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+    buckets=SECONDS_BUCKETS,
 )
 
 _LOG = logging.getLogger("erp.kernel")
