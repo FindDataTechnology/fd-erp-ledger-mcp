@@ -201,17 +201,64 @@ def drop_schema(settings: Settings) -> None:
                 cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
     finally:
         get_pool(settings).putconn(conn)
-    # 审计留痕：用租户 0 的连接写（被删 schema 已不可写）。
-    audit_settings = dataclasses.replace(settings, tenant_id=DEFAULT_TENANT)
-    aconn = get_pool(audit_settings).getconn()
-    try:
-        from .tenancy import audit as _audit
+    # 审计留痕：被删的 schema 已不可写，所以要找一个**存在 audit 表**的 schema 写。
+    # 优先租户 0（`public`）——但「租户 0 一定 migrate 过」是个不成立的假设：测试库与
+    # 新建库里 `public` 常常是空的（所有表都建在租户 schema 内）。所以先探，探不到
+    # 就退到任一现有租户 schema；全都探不到时——删除已经生效，审计写不进去不该
+    # 让调用方误以为「没删成」，因此记一条警告而不是抛错。
+    _audit_drop(settings, schema)
 
-        _audit(aconn, DEFAULT_TENANT, "tenant_dropped",
-               target=schema, detail={"schema": schema,
-                                      "tenant_id": settings.tenant_id})
-    finally:
-        get_pool(audit_settings).putconn(aconn)
+
+def _audit_drop(settings: Settings, dropped_schema: str) -> None:
+    """把 `tenant_dropped` 写进任一可写的 audit 表（见 `drop_schema` 的注释）。"""
+    from .tenancy import audit as _audit
+
+    candidates: list[str] = [DEFAULT_TENANT]
+    try:
+        conn = get_pool(settings).getconn()
+        try:
+            rows = fetch_all(
+                conn,
+                "SELECT nspname FROM pg_namespace WHERE nspname = %s OR nspname LIKE %s",
+                (PUBLIC_SCHEMA, f"{TENANT_SCHEMA_PREFIX}%"),
+            )
+        finally:
+            get_pool(settings).putconn(conn)
+        for r in rows:
+            name = r["nspname"]
+            tid = DEFAULT_TENANT if name == PUBLIC_SCHEMA else name[len(TENANT_SCHEMA_PREFIX):]
+            if tid not in candidates:
+                candidates.append(tid)
+    except Exception:  # noqa: BLE001 - 候选探测失败不阻断审计尝试
+        pass
+
+    for tenant in candidates:
+        probe = dataclasses.replace(settings, tenant_id=tenant)
+        try:
+            aconn = get_pool(probe).getconn()
+        except Exception:  # noqa: BLE001
+            continue
+        try:
+            # audit 表不在这个 schema 里就抛，换下一个候选。
+            _audit(aconn, tenant, "tenant_dropped",
+                   target=dropped_schema,
+                   detail={"schema": dropped_schema,
+                           "tenant_id": settings.tenant_id,
+                           "audited_in": tenant})
+            return
+        except Exception:  # noqa: BLE001
+            continue
+        finally:
+            try:
+                get_pool(probe).putconn(aconn)
+            except Exception:  # noqa: BLE001
+                pass
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "tenant %s dropped (schema %s) but no writable audit table was found — "
+        "the drop took effect; audit trail is missing", settings.tenant_id, dropped_schema
+    )
 
 
 def list_tenant_schemas(settings: Settings) -> dict[str, Any]:

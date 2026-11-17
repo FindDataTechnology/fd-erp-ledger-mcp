@@ -103,9 +103,13 @@ def test_ledger_has_no_quantity_column(settings):
     这条用例保证「数量走对象、金额走账本」不被后来的加列悄悄破坏。
     """
     with connection(settings) as conn:
+        # `current_schema()` 而不是硬编码 'public'：隔离边界已经是 schema
+        # （erp-tenant-schema-isolation），表建在租户 schema 里。写死 'public'
+        # 会让这条用例在租户化之后永远返回空列集——断言 `"amount" in cols`
+        # 随即变红，而红的原因与被测行为无关。
         cols = [r[0] for r in conn.execute(
             "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema='public' AND table_name='journal_entries'").fetchall()]
+            "WHERE table_schema = current_schema() AND table_name='journal_entries'").fetchall()]
     assert "amount" in cols
     for forbidden in ("quantity", "qty", "unit", "lot", "serial"):
         assert forbidden not in cols, f"账本出现数量列 {forbidden!r}：数量面不属于账本"
