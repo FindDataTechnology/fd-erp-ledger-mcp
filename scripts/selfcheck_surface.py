@@ -356,7 +356,46 @@ def check() -> tuple[list[str], dict]:
             if t not in declared:
                 problems.append(f"分页工具 {t} 未声明 output_structure（task 2.5 要求）")
 
+    problems.extend(check_paginate_calls())
     return problems, {"manifest": m, "commercial": commercial, "ann": ann}
+
+
+def check_paginate_calls() -> list[str]:
+    """每个 `paginate(...)` 调用都必须传 offset 与 limit。
+
+    `result.paginate` 的签名是 keyword-only 必填（`def paginate(rows, *, offset, limit)`），
+    漏传会在**运行时**抛 TypeError，被 `@safe_tool` 包成 UPSTREAM_UNAVAILABLE ——
+    工具于是「在册、可调、恒失败」，而 surface 闸只验在册与闭合，看不见。
+
+    2026-11-17 实证：`list_posting_rules` 从上线起就是这样坏的（tools.py:603 只传了
+    rows），直到 ERP 过账舰的巡检岗真跑才把它逼出来（agent 如实报了「缺 offset/limit」）。
+    这条静态检查让同类缺陷在本地就能红，而不是等一次真机巡检。
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parent.parent / "fd_erp_ledger_mcp" / "tools.py"
+    try:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        return [f"[分页调用] tools.py 不可解析：{exc}"]
+
+    problems: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", None)
+        if name != "paginate":
+            continue
+        kwargs = {kw.arg for kw in node.keywords if kw.arg}
+        missing = [k for k in ("offset", "limit") if k not in kwargs]
+        if missing:
+            problems.append(
+                f"[分页调用] tools.py:{node.lineno} 的 paginate() 缺 {', '.join(missing)}"
+                "——签名是 keyword-only 必填，漏传会让该工具在运行时恒报 UPSTREAM_UNAVAILABLE"
+            )
+    return problems
 
 
 def check_closure(commercial: set[str], expose: set[str]) -> list[str]:

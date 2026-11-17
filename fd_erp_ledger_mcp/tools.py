@@ -589,6 +589,8 @@ def register(mcp: FastMCP, settings: Settings) -> None:
     def list_posting_rules(
         event_type: str | None = None,
         tenant_id: str | None = None,
+        offset: int = 0,
+        limit: int = 0,
     ) -> dict[str, Any]:
         """列出过账规则各版本与状态（draft/active/retired）。"""
         with connection(settings) as conn:
@@ -600,7 +602,12 @@ def register(mcp: FastMCP, settings: Settings) -> None:
                 sql += " AND event_type=%s"
                 params.append(event_type)
             sql += " ORDER BY event_type, version"
-            return paginate(fetch_all(conn, sql, tuple(params)))
+            # paginate() 要求 offset/limit（result.py 的签名是 keyword-only 必填）：
+            # 这一处此前只传了 rows，于是每次调用都被 safe_tool 包成
+            # UPSTREAM_UNAVAILABLE — 工具「在册、可调、恒失败」，2026-11-17 由
+            # ERP 过账舰的巡检岗真跑抓出（它如实报了「缺 offset/limit」）。
+            # limit=0 是内核的既有约定 = 用 RESULT_MAX_ROWS 上限（见 :411 同款）。
+            return paginate(fetch_all(conn, sql, tuple(params)), offset=offset, limit=limit)
 
     # ---- 31. post_event：事件 → 分录 ----
     @mcp.tool(annotations=annotations_for("post_event"))
