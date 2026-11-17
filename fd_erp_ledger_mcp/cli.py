@@ -314,12 +314,66 @@ def tenant_drop(tenant_id: str, yes: bool) -> None:
 
 
 @tenant_cmd.command("list")
-def tenant_list() -> None:
-    """列举租户：schema 清单即租户清单（public 恒在，代表租户 0）。"""
+@click.option("--check-versions", is_flag=True,
+              help="同时核对每个租户 schema 的迁移版本是否等于代码要求版本；不一致退出非零")
+def tenant_list(check_versions: bool) -> None:
+    """列举租户：schema 清单即租户清单（public 恒在，代表租户 0）。
+
+    `--check-versions` 是发布后/巡检时的判据：某个租户 schema 漏应用了一个迁移，
+    它的表结构就与代码对不上，而**运行时不报错**（缺的列要到真用到才炸）。
+    离线 selfcheck 是 stdlib-only、不连库，所以这条判据归这里。
+    """
     from .db import list_tenant_schemas
 
     settings = Settings.from_env()
-    click.echo(json.dumps(list_tenant_schemas(settings), ensure_ascii=False, default=str))
+    body = list_tenant_schemas(settings)
+    if check_versions:
+        body["versions"] = _check_tenant_versions(settings, body)
+        click.echo(json.dumps(body, ensure_ascii=False, default=str))
+        if not body["versions"]["consistent"]:
+            # 只输出一份 JSON（下游按行解析），靠退出码表达「不一致」。
+            raise SystemExit(1)
+        return
+    click.echo(json.dumps(body, ensure_ascii=False, default=str))
+
+
+def _check_tenant_versions(settings: Settings, listing: dict) -> dict:
+    """每个租户 schema 的已应用迁移集合 vs 代码要求的版本集合。"""
+    from .db import REQUIRED_SCHEMA_VERSION, _migration_files, fetch_all
+
+    required = {p.stem for p in _migration_files()}
+    per_tenant: dict[str, dict] = {}
+    consistent = True
+    for entry in listing.get("tenants", []):
+        tid = entry["tenant_id"]
+        probe = _tenant_settings(tid)
+        try:
+            conn = get_pool(probe).getconn()
+            try:
+                rows = fetch_all(conn, "SELECT version FROM schema_migrations")
+                have = {r["version"] for r in rows}
+            finally:
+                get_pool(probe).putconn(conn)
+        except Exception as exc:  # noqa: BLE001 - 读不到就如实记为不可判，不当作通过
+            per_tenant[tid] = {"status": "unreadable", "error": str(exc)[:200]}
+            consistent = False
+            continue
+        missing = sorted(required - have)
+        extra = sorted(have - required)
+        ok = not missing and not extra
+        per_tenant[tid] = {
+            "status": "ok" if ok else "drift",
+            "applied": len(have),
+            "required": len(required),
+            **(  {"missing": missing} if missing else {}),
+            **(  {"unexpected": extra} if extra else {}),
+        }
+        consistent = consistent and ok
+    return {
+        "consistent": consistent,
+        "code_required_version": REQUIRED_SCHEMA_VERSION,
+        "tenants": per_tenant,
+    }
 
 
 if __name__ == "__main__":
