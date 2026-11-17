@@ -229,5 +229,98 @@ def bill_period_cmd(tenant: str | None, period: str, snapshot_file: str,
     click.echo(json.dumps(result, ensure_ascii=False))
 
 
+@cli.group("tenant")
+def tenant_cmd() -> None:
+    """租户 schema 运维（openspec: erp-tenant-schema-isolation 2.2-2.4）。
+
+    租户的开通/删除/列举都是 **schema 级**操作：清单即权威，不另建租户注册表
+    （design D6——再建一张表就多一份必然漂移的真相）。
+    """
+
+
+def _tenant_settings(tenant_id: str) -> Settings:
+    """按指定租户派生 Settings。
+
+    `Settings` 是从 `ERP_TENANT_ID` 读的（一进程一租户），而运维命令要操作**别的**
+    租户，所以不能靠改 env——`dataclasses.replace` 派一份即可，池的缓存键带 schema，
+    两个租户的池互不干扰。
+    """
+    import dataclasses
+
+    return dataclasses.replace(Settings.from_env(), tenant_id=tenant_id)
+
+
+@tenant_cmd.command("create")
+@click.argument("tenant_id")
+def tenant_create(tenant_id: str) -> None:
+    """开通租户：建 schema + 全量重放迁移 + 载入最小科目表。
+
+    `default` 是库内置的租户 0（`public`），开通它是 no-op——生产零变更是短路
+    保证，不是「碰巧没执行到」。
+    """
+    from .universal_accounts import seed_universal_accounts
+    from .db import create_schema
+    from .tenancy import PUBLIC_SCHEMA, schema_for
+
+    settings = _tenant_settings(tenant_id)
+    schema = schema_for(tenant_id)
+    if schema == PUBLIC_SCHEMA:
+        click.echo(json.dumps({"ok": True, "tenant": tenant_id, "schema": schema,
+                               "note": "租户 0 是库内置的 public，无需开通"},
+                              ensure_ascii=False))
+        return
+    create_schema(settings)
+    applied = migrate(settings)
+    conn = get_pool(settings).getconn()
+    try:
+        accounts = seed_universal_accounts(conn, tenant_id)
+    finally:
+        get_pool(settings).putconn(conn)
+    click.echo(json.dumps({"ok": True, "tenant": tenant_id, "schema": schema,
+                           "migrate": applied, "accounts": accounts},
+                          ensure_ascii=False, default=str))
+
+
+@tenant_cmd.command("drop")
+@click.argument("tenant_id")
+@click.option("--yes", is_flag=True, help="确认不可逆删除（缺省只做 dry-run 并退出非零）")
+def tenant_drop(tenant_id: str, yes: bool) -> None:
+    """删除租户：DROP SCHEMA CASCADE + 审计留痕。
+
+    拒绝删除 `default`：它是租户 0，误删等于把生产库抹了。这是硬拒，不是警告。
+    """
+    from .db import get_pool as _get_pool
+    from .db import drop_schema
+    from .tenancy import PUBLIC_SCHEMA, schema_for
+
+    schema = schema_for(tenant_id)
+    if schema == PUBLIC_SCHEMA:
+        click.echo(json.dumps(
+            {"ok": False, "error": {"code": "TENANT_ZERO_PROTECTED",
+                                    "message": "default 是租户 0（public schema），拒绝删除"}},
+            ensure_ascii=False), err=True)
+        raise SystemExit(1)
+    if not yes:
+        click.echo(json.dumps(
+            {"ok": False, "tenant": tenant_id, "schema": schema,
+             "error": {"code": "CONFIRMATION_REQUIRED",
+                       "message": "这是不可逆操作；确认请加 --yes"}},
+            ensure_ascii=False), err=True)
+        raise SystemExit(1)
+    settings = _tenant_settings(tenant_id)
+    drop_schema(settings)
+    click.echo(json.dumps({"ok": True, "tenant": tenant_id, "schema": schema,
+                           "dropped": True}, ensure_ascii=False))
+
+
+@tenant_cmd.command("list")
+def tenant_list() -> None:
+    """列举租户：schema 清单即租户清单（public 恒在，代表租户 0）。"""
+    from .db import list_tenant_schemas
+
+    settings = Settings.from_env()
+    click.echo(json.dumps(list_tenant_schemas(settings), ensure_ascii=False, default=str))
+
+
 if __name__ == "__main__":
     cli()

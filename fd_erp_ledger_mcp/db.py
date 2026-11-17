@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any, Iterator
 
 from .config import Settings
 from .errors import ErpError
+from .tenancy import DEFAULT_TENANT, PUBLIC_SCHEMA, TENANT_SCHEMA_PREFIX, schema_for
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 代码要求的最低 schema 版本。加迁移必须同步提这里，否则闸门放行一个缺列的库，
@@ -82,17 +84,31 @@ def _dsn(settings: Settings) -> str:
 
 
 def get_pool(settings: Settings) -> Any:
-    """惰性连接池（线程安全，供后台对账 worker 复用同一池）。"""
+    """惰性连接池（线程安全，供后台对账 worker 复用同一池）。
+
+    `search_path` 的设定位置是**池构造期**而不是每次借出（design D3 的修正）：
+    `settings.tenant_id` 每进程恒定，所以每条连接一出生就定向到本租户 schema，
+    不需要逐请求 `SET`——少一处「忘了重置」的失败面。`options` 里的 schema 名由
+    `schema_for()` 白名单校验，不是拼用户输入。
+
+    **缓存键必须带 schema**：只按 dsn 缓存的话，同一进程里第二个租户会复用第一个
+    租户的池、`search_path` 静默串到别人家 —— 这正是本 change 要消灭的那类
+    「不报错的串数据」。`(dsn, schema)` 两元组是这条不变量的表达式。
+    """
     dsn = _dsn(settings)
+    schema = schema_for(settings.tenant_id)
+    key = f"{dsn}\x00{schema}"
     with _lock:
-        pool = _pools.get(dsn)
+        pool = _pools.get(key)
         if pool is None:
             from psycopg_pool import ConnectionPool
             # autocommit=True 让每个 `conn.transaction()` 成为真实顶层事务，
             # DEFERRABLE 借贷必平约束才能在落账事务边界（而非连接池归还时）触发。
             pool = ConnectionPool(dsn, min_size=1, max_size=8, timeout=10, open=True,
-                                  name="erp-ledger", kwargs={"autocommit": True})
-            _pools[dsn] = pool
+                                  name=f"erp-ledger:{schema}",
+                                  kwargs={"autocommit": True,
+                                          "options": f"-c search_path={schema}"})
+            _pools[key] = pool
         return pool
 
 
@@ -114,6 +130,115 @@ def fetch_all(conn: Any, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
 def fetch_one(conn: Any, sql: str, params: tuple = ()) -> dict[str, Any] | None:
     rows = fetch_all(conn, sql, params)
     return rows[0] if rows else None
+
+
+def close_pool(settings: Settings) -> None:
+    """关闭并移除该租户的池（运维/测试用，例如临时库用完要 DROP DATABASE）。
+
+    存在的理由：池的键现在是 `(dsn, schema)` 而不是裸 dsn，调用方**不该**自己去
+    `_pools` 里拼键——拼错了池就关不掉，而症状是 `DROP DATABASE` 报「还有其它
+    会话在用这个库」，看起来像并发或权限问题，其实是句柄没关。
+    """
+    schema = schema_for(settings.tenant_id)
+    key = f"{_dsn(settings)}\x00{schema}"
+    with _lock:
+        pool = _pools.pop(key, None)
+    if pool is not None:
+        pool.close()
+
+
+# ---------------------------------------------------------------------------
+# 租户 schema 生命周期
+# ---------------------------------------------------------------------------
+
+def create_schema(settings: Settings) -> str:
+    """把 `settings` 指向的租户 schema 建出来（幂等），返回 schema 名。
+
+    `public` 是库内置的（租户 0），直接返回、不发任何 DDL——生产零变更是这条
+    短路保证的，不是「碰巧没执行到」。
+
+    连接用的是**本租户的池**：此时 schema 还不存在，`SET search_path` 指向一个
+    不存在的 schema 在 PG 里是合法的（它只是一串候选名），所以可以在这条连接上
+    直接 `CREATE SCHEMA`，随后 `migrate()` 就在同一 schema 内建表。
+    """
+    schema = schema_for(settings.tenant_id)
+    if schema == PUBLIC_SCHEMA:
+        return schema
+    conn = get_pool(settings).getconn()
+    try:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                # schema 名经白名单校验（[a-z0-9_]），加引号后拼进 DDL 是安全的；
+                # DDL 位置无法用参数占位符，这是唯一可行的写法。
+                cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    finally:
+        get_pool(settings).putconn(conn)
+    return schema
+
+
+def drop_schema(settings: Settings) -> None:
+    """删掉 `settings` 指向的租户 schema（含其全部对象），并留审计痕。
+
+    **拒绝 public**：租户 0 就是生产库本体，误删等于抹库。CLI 已拦一道，这里再拦
+    一道——运维脚本直接调本函数时不该绕过保护。
+
+    `CASCADE` 是刻意的：租户 schema 内的表互相有外键，逐表 DROP 要排序且漏一张就
+    留残留；`DROP SCHEMA ... CASCADE` 是 PG 保证的全清。
+
+    审计走**连到 public 的连接**（租户 0 的池）：被删的 schema 已不存在，往它里面
+    写审计行必然失败；而「删了谁」这件事本身必须留痕。
+    """
+    from .tenancy import PUBLIC_SCHEMA
+
+    schema = schema_for(settings.tenant_id)
+    if schema == PUBLIC_SCHEMA:
+        raise ErpError("TENANT_ZERO_PROTECTED", "public 是租户 0 的 schema，拒绝删除",
+                       hint="租户 0 代表库本体，删除它等于抹库")
+    conn = get_pool(settings).getconn()
+    try:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+    finally:
+        get_pool(settings).putconn(conn)
+    # 审计留痕：用租户 0 的连接写（被删 schema 已不可写）。
+    audit_settings = dataclasses.replace(settings, tenant_id=DEFAULT_TENANT)
+    aconn = get_pool(audit_settings).getconn()
+    try:
+        from .tenancy import audit as _audit
+
+        _audit(aconn, DEFAULT_TENANT, "tenant_dropped",
+               target=schema, detail={"schema": schema,
+                                      "tenant_id": settings.tenant_id})
+    finally:
+        get_pool(audit_settings).putconn(aconn)
+
+
+def list_tenant_schemas(settings: Settings) -> dict[str, Any]:
+    """列出全部租户 schema。
+
+    `public` 恒在（租户 0），单独标出；其余按 `tenant_` 前缀认。**不读注册表**——
+    schema 清单本身就是权威（design D6）。
+    """
+    conn = get_pool(settings).getconn()
+    try:
+        rows = fetch_all(
+            conn,
+            "SELECT nspname FROM pg_namespace "
+            "WHERE nspname = %s OR nspname LIKE %s ORDER BY nspname",
+            (PUBLIC_SCHEMA, f"{TENANT_SCHEMA_PREFIX}%"),
+        )
+    finally:
+        get_pool(settings).putconn(conn)
+    names = [r["nspname"] for r in rows]
+    return {
+        "schemas": names,
+        "tenant_zero": PUBLIC_SCHEMA if PUBLIC_SCHEMA in names else None,
+        "tenants": [
+            {"schema": n, "tenant_id": n[len(TENANT_SCHEMA_PREFIX):]}
+            for n in names if n.startswith(TENANT_SCHEMA_PREFIX)
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -172,13 +297,20 @@ def mark_adopted(settings: Settings, version: str = REQUIRED_SCHEMA_VERSION) -> 
 
 
 def assert_schema_version(settings: Settings) -> None:
-    """fail-fast：库内记录版本落后于代码要求即拒绝服务，同时点名两侧版本。"""
+    """fail-fast：库内记录版本落后于代码要求即拒绝服务，同时点名两侧版本。
+
+    查的是**连接当前 schema**（`current_schema()`，即池给这条连接设的
+    `search_path` 首个元素）而不是写死 `public`——schema 隔离后每个租户有自己的一份
+    `schema_migrations`，写死 public 会让租户 N 的进程拿租户 0 的版本号当自己的，
+    于是「缺列的库」也能通过启动闸，故障推迟到运行时的某次 INSERT 上。
+    """
     conn = get_pool(settings).getconn()
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT current_schema()")
             cur.execute(
                 "SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema='public' AND table_name='schema_migrations'"
+                "WHERE table_schema = current_schema() AND table_name='schema_migrations'"
             )
             if cur.fetchone() is None:
                 raise ErpError(

@@ -357,6 +357,7 @@ def check() -> tuple[list[str], dict]:
                 problems.append(f"分页工具 {t} 未声明 output_structure（task 2.5 要求）")
 
     problems.extend(check_paginate_calls())
+    problems.extend(check_migrations_are_schema_neutral())
     return problems, {"manifest": m, "commercial": commercial, "ann": ann}
 
 
@@ -395,6 +396,38 @@ def check_paginate_calls() -> list[str]:
                 f"[分页调用] tools.py:{node.lineno} 的 paginate() 缺 {', '.join(missing)}"
                 "——签名是 keyword-only 必填，漏传会让该工具在运行时恒报 UPSTREAM_UNAVAILABLE"
             )
+    return problems
+
+
+def check_migrations_are_schema_neutral() -> list[str]:
+    """迁移脚本必须与 schema 无关：不得出现 `public.` / `tenant_` 限定的对象名。
+
+    隔离靠 `search_path`，而 `search_path` 只在对象名**不带 schema 前缀**时生效。
+    一旦有人写 `CREATE TABLE public.foo`，所有租户都会把表建进 `public` ——
+    隔离静默失效，运行时不报任何错。这与 `list_posting_rules` 缺参那个 bug 同族：
+    静态闸看不见、运行时被包装吞掉，只有真机巡检才暴露。
+    """
+    import re
+    from pathlib import Path
+
+    migrations = Path(__file__).resolve().parent.parent / "fd_erp_ledger_mcp" / "migrations"
+    if not migrations.is_dir():
+        return [f"[迁移 schema 中立] 迁移目录不存在：{migrations}"]
+
+    # 只查「把 schema 名当限定符用」的形态：public.foo / tenant_x.foo
+    qualified = re.compile(r"\b(public|tenant_[a-z0-9_]*)\s*\.\s*[A-Za-z_\"]", re.IGNORECASE)
+    # 注释里提到 public 是允许的（解释性文字），所以先剥行注释
+    problems: list[str] = []
+    for path in sorted(migrations.glob("*.sql")):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            code = line.split("--", 1)[0]
+            hit = qualified.search(code)
+            if hit:
+                problems.append(
+                    f"[迁移 schema 中立] {path.name}:{lineno} 出现 schema 限定名 "
+                    f"{hit.group(0)!r}——迁移必须靠 search_path 定向，写死 schema 会让"
+                    "隔离静默失效（所有租户都建到同一个 schema）"
+                )
     return problems
 
 
