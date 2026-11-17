@@ -31,7 +31,7 @@ ALTER TABLE event_types
 -- 前缀触发器只管 marketing./非 marketing. 两种情况，认不出拼错的第三个值。
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'event_types_producer_known') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint co JOIN pg_class c ON c.oid = co.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE co.conname = 'event_types_producer_known' AND n.nspname = current_schema()) THEN
         ALTER TABLE event_types
             ADD CONSTRAINT event_types_producer_known
             CHECK (producer IN ('erp', 'marketing'));
@@ -95,7 +95,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'event_types_producer_consistency') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'event_types_producer_consistency' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER event_types_producer_consistency
             BEFORE INSERT OR UPDATE ON event_types
             FOR EACH ROW EXECUTE FUNCTION erp_assert_type_producer_consistency();

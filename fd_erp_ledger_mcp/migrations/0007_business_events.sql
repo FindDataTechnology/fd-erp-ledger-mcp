@@ -166,7 +166,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'business_events_no_mutation') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'business_events_no_mutation' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER business_events_no_mutation
             BEFORE UPDATE OR DELETE ON business_events
             FOR EACH ROW EXECUTE FUNCTION erp_deny_event_mutation();
@@ -186,7 +186,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'business_events_no_truncate') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'business_events_no_truncate' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER business_events_no_truncate
             BEFORE TRUNCATE ON business_events
             FOR EACH STATEMENT EXECUTE FUNCTION erp_deny_event_truncate();
@@ -203,7 +203,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'event_revisions_append_only') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'event_revisions_append_only' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER event_revisions_append_only
             BEFORE UPDATE OR DELETE ON event_revisions
             FOR EACH ROW EXECUTE FUNCTION erp_deny_event_revision_mutation();

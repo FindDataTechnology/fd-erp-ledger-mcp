@@ -66,10 +66,10 @@ def test_schema_version_gate_fails_fast_on_missing(settings):
         assert ei.value.code == "SCHEMA_OUTDATED"
         assert ei.value.detail["required"] == REQUIRED_SCHEMA_VERSION
     finally:
-        from fd_erp_ledger_mcp.db import _pools  # 关闭临时库连接池再 DROP
-        pool = _pools.pop(scratch_dsn, None)
-        if pool is not None:
-            pool.close()
+        # 关闭临时库连接池再 DROP：池的键是 (dsn, schema)，故走公开助手而
+        # 不是自己拼 _pools 的键（拼错就关不掉，DROP DATABASE 会报「还有会话在用」）。
+        from fd_erp_ledger_mcp.db import close_pool
+        close_pool(s)
         admin = psycopg.connect(settings.database_url, autocommit=True)
         try:
             admin.execute("DROP DATABASE IF EXISTS erp_gate_scratch")

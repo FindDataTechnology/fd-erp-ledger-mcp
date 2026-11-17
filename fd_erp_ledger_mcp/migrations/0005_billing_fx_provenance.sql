@@ -30,7 +30,7 @@ ALTER TABLE fee_details ADD COLUMN IF NOT EXISTS fx_source       TEXT;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'erp_fee_fx_provenance') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint co JOIN pg_class c ON c.oid = co.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE co.conname = 'erp_fee_fx_provenance' AND n.nspname = current_schema()) THEN
         ALTER TABLE fee_details ADD CONSTRAINT erp_fee_fx_provenance CHECK (
             (fx_rate IS NULL AND fx_as_of IS NULL AND fx_source IS NULL)
             OR
@@ -44,7 +44,7 @@ $$;
 -- 金额成对：要么都没写（存量行），要么都写且非负。
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'erp_fee_amount_pair') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint co JOIN pg_class c ON c.oid = co.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE co.conname = 'erp_fee_amount_pair' AND n.nspname = current_schema()) THEN
         ALTER TABLE fee_details ADD CONSTRAINT erp_fee_amount_pair CHECK (
             (original_amount IS NULL AND base_amount IS NULL)
             OR

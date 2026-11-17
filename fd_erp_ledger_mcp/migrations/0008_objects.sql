@@ -69,7 +69,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'object_balances_projection_only') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'object_balances_projection_only' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER object_balances_projection_only
             BEFORE INSERT OR UPDATE ON object_balances
             FOR EACH ROW EXECUTE FUNCTION erp_deny_balance_direct_write();
@@ -86,7 +86,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'object_events_append_only') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'object_events_append_only' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER object_events_append_only
             BEFORE UPDATE OR DELETE ON object_events
             FOR EACH ROW EXECUTE FUNCTION erp_deny_object_event_mutation();
@@ -138,7 +138,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'object_events_unit_guard') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'object_events_unit_guard' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER object_events_unit_guard
             BEFORE INSERT ON object_events
             FOR EACH ROW EXECUTE FUNCTION erp_object_unit_guard();

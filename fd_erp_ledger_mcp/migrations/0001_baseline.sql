@@ -112,7 +112,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'journal_entries_balance_deferred') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'journal_entries_balance_deferred' AND n.nspname = current_schema()) THEN
         CREATE CONSTRAINT TRIGGER journal_entries_balance_deferred
             AFTER INSERT OR UPDATE OR DELETE ON journal_entries
             DEFERRABLE INITIALLY DEFERRED
@@ -132,7 +132,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'journal_entries_append_only') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'journal_entries_append_only' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER journal_entries_append_only
             BEFORE UPDATE OR DELETE ON journal_entries
             FOR EACH ROW EXECUTE FUNCTION erp_deny_journal_mutation();
@@ -155,7 +155,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'journal_entries_no_truncate') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'journal_entries_no_truncate' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER journal_entries_no_truncate
             BEFORE TRUNCATE ON journal_entries
             FOR EACH STATEMENT EXECUTE FUNCTION erp_deny_journal_truncate();

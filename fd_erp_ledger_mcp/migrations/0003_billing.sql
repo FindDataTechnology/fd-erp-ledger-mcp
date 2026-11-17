@@ -71,7 +71,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'fee_details_append_only') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'fee_details_append_only' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER fee_details_append_only
             BEFORE UPDATE OR DELETE ON fee_details
             FOR EACH ROW EXECUTE FUNCTION erp_deny_fee_mutation();
@@ -93,7 +93,7 @@ $$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'fee_details_no_truncate') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE t.tgname = 'fee_details_no_truncate' AND n.nspname = current_schema()) THEN
         CREATE TRIGGER fee_details_no_truncate
             BEFORE TRUNCATE ON fee_details
             FOR EACH STATEMENT EXECUTE FUNCTION erp_deny_fee_truncate();
