@@ -1,5 +1,7 @@
 # fd-erp-ledger-mcp
 
+> **Part of the [Base line (寻数·壹座)](https://www.finddatatech.cloud/products/base) of [FindData](https://www.finddatatech.cloud)** — ERP ledger MCP: append-only books over the ERP record core, exposed as agent tools.
+
 ERP 账本内核 MCP：行业无关的最小复式事件账 + agent「只写 proposal → 确认门落账」
 车道 + 只读对账引擎 + 计费规则引擎 + 信用额度。OpenSpec change `add-erp-domain`
 的实施产物，计费/信用归 `add-supply-chain-vertical`（任务 1.x / 4.2）；
