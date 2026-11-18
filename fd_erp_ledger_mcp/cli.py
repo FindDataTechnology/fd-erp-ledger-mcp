@@ -7,7 +7,7 @@ import click
 
 from . import __version__
 from .config import Settings
-from .db import assert_schema_version, get_pool, mark_adopted, migrate
+from .db import assert_schema_version, create_schema, get_pool, mark_adopted, migrate
 from .fx import seed_fx_facts
 
 
@@ -85,8 +85,18 @@ def serve(host: str, port: int, transport: str, skip_schema_check: bool) -> None
 
 @cli.command()
 def migrate_cmd() -> None:
-    """迁移阶段：一次性、可重放、幂等。运行时绝不发 DDL。"""
+    """迁移阶段：一次性、可重放、幂等。运行时绝不发 DDL。
+
+    先 ``create_schema`` 再 migrate：非 `default` 租户的 `search_path` 指向
+    `tenant_<slug>`，而全新库里那个 schema 还不存在——`CREATE TABLE IF NOT
+    EXISTS schema_migrations` 会以 `InvalidSchemaName: no schema has been
+    selected to create in` 失败。生产上没暴露是因为库早就建好了；**装机场景
+    恰恰是「全新库」**，所以这条短路必须在命令里补上（2026-11-18 真机实测发现）。
+
+    `default` 租户短路到 `public`，不发任何 DDL——生产零变更的保证不变。
+    """
     settings = Settings.from_env()
+    create_schema(settings)
     result = migrate(settings)
     click.echo(json.dumps(result, ensure_ascii=False))
 
