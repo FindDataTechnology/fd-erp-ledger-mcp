@@ -101,6 +101,9 @@ def test_unreadable_tenant_is_not_a_pass(clean_tenant, monkeypatch):
     params = conninfo_to_dict(_require_dsn())
     params["options"] = f"-c search_path={schema_for(tid)}"
     s = Settings(database_url=make_conninfo(**params), tenant_id=tid, base_currency="CNY")
+    # 只建 schema、不 migrate。注意：如果库里 `public` 有历史表，启动期的收养逻辑
+    # （adopt_public_into_tenant_schema）会把它们搬进来，这条用例就不再是「空 schema」。
+    # 所以显式把 public 的表挡住——本用例要验的是 `unreadable`，不是收养。
     create_schema(s)  # 只建 schema、不 migrate
     try:
         monkeypatch.setenv("ERP_LEDGER_DATABASE_URL", _require_dsn())

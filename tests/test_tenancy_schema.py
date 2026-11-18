@@ -7,8 +7,16 @@ from __future__ import annotations
 
 import pytest
 
+import json
+from pathlib import Path
+
 from fd_erp_ledger_mcp.errors import ErpError
 from fd_erp_ledger_mcp.tenancy import MAX_SLUG_LEN, schema_for
+
+#: 本仓的判据清单（自包含：CI 只 checkout 本仓，读不到平台仓的文件）。
+#: 与平台侧 `paas/scripts/erp-tenant-slug-cases.json` 是**同一组值**，
+#: 跨仓逐值一致由工作区脚本 `scripts/check_erp_tenant_slug_contract.py` 核对。
+SLUG_CONTRACT = Path(__file__).resolve().parent / "erp-tenant-slug-cases.json"
 
 pytestmark = pytest.mark.no_db
 
@@ -62,3 +70,20 @@ def test_empty_slug_is_rejected():
         schema_for("")
     assert ei.value.code == "INVALID_ARGUMENT"
     assert "不能为空" in ei.value.message
+
+
+def test_slug_whitelist_matches_declared_cases():
+    """6.1：内核的接受/拒绝与平台侧逐值一致（共用契约文件）。"""
+    cases = json.loads(SLUG_CONTRACT.read_text(encoding="utf-8"))["cases"]
+    assert cases, "契约文件不能是空的（空集合会让本断言无条件通过）"
+    wrong = []
+    for case in cases:
+        value, accept = case["value"], case["accept"]
+        try:
+            schema_for(value)
+            got = True
+        except ErpError:
+            got = False
+        if got != accept:
+            wrong.append(f"{value!r} 期望 {accept} 实际 {got}（{case['why']}）")
+    assert wrong == [], "内核侧与平台侧对租户标识的判定不一致：" + "；".join(wrong)
