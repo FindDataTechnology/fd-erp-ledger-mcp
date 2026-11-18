@@ -28,6 +28,18 @@ def serve(host: str, port: int, transport: str, skip_schema_check: bool) -> None
     from .server import create_server
     settings = Settings.from_env()
     if not skip_schema_check and settings.database_url:
+        # 迁移期收养（erp-tenant-schema-isolation）：schema 隔离前所有表都在 public，
+        # 启用后本租户的 search_path 指向 tenant_<slug>——那里是空的，启动断言会报
+        # 「数据库未登记任何 schema 版本」。这一步把 public 的历史数据整体搬进来，
+        # 幂等：目标已建好、或 public 也没有时什么都不做。
+        from .db import adopt_public_into_tenant_schema
+
+        adopted = adopt_public_into_tenant_schema(settings)
+        if adopted:
+            import sys as _sys
+
+            print(json.dumps({"event": "tenant_schema_adopted", **adopted},
+                             ensure_ascii=False), file=_sys.stderr)
         # db-schema-lifecycle：启动前比对版本，落后即 fail-fast
         assert_schema_version(settings)
         # optimize-erp-solution 6.5：遗留对账任务续跑或显式重排（不再静默留 interrupted）。

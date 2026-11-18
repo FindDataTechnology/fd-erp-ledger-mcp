@@ -343,6 +343,85 @@ def mark_adopted(settings: Settings, version: str = REQUIRED_SCHEMA_VERSION) -> 
     return {"adopted": version, "ddl_executed": False}
 
 
+def adopt_public_into_tenant_schema(settings: Settings) -> dict[str, Any] | None:
+    """把历史遗留的 `public` 数据整体搬进本租户的 schema（一次性、幂等）。
+
+    **为什么需要这一步**：schema 隔离之前，所有表都在 `public`，租户靠
+    `tenant_id` 列区分。启用 schema 隔离后，非 `default` 租户的 `search_path` 指向
+    `tenant_<slug>`——那里是空的，于是启动断言报「数据库未登记任何 schema 版本」，
+    进程起不来（2026-11-18 生产实测，六次重启）。
+
+    **判据（只搬一次，且只在真正需要时搬）**：
+      · 目标 schema 里没有 `schema_migrations`（本租户从未建过）
+      · 且 `public` 里有 `schema_migrations`（确有历史数据）
+      · 且 `public` 不是本租户自己的 schema（`default` 直接跳过）
+    三条同时成立才搬；任一不成立返回 None 表示「无需动作」。
+
+    **搬法**：`ALTER TABLE ... SET SCHEMA` 逐表搬（连同序列与触发器自动跟随），
+    然后补上本租户 `search_path` 的解析。不用 dump/restore：同库内 SET SCHEMA 是
+    元数据操作，秒级、不复制数据。
+
+    映射过程被审计留痕（`tenant_schema_adopted`），事后可查「这次搬家发生在何时」。
+    """
+    schema = schema_for(settings.tenant_id)
+    if schema == PUBLIC_SCHEMA:
+        return None  # 租户 0 本来就在 public，无需搬
+
+    conn = get_pool(settings).getconn()
+    try:
+        with conn.cursor() as cur:
+            def has_migrations(nsp: str) -> bool:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = %s AND table_name = 'schema_migrations'",
+                    (nsp,),
+                )
+                return cur.fetchone() is not None
+
+            if has_migrations(schema):
+                return None  # 本租户已建好，无需搬
+            if not has_migrations(PUBLIC_SCHEMA):
+                return None  # public 也没有，交给 migrate() 正常建档
+
+            cur.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname = %s ORDER BY tablename",
+                (PUBLIC_SCHEMA,),
+            )
+            tables = [r[0] for r in cur.fetchall()]
+            # 序列**不单独搬**：serial/identity 序列归属于它的表，
+            # `ALTER TABLE ... SET SCHEMA` 会把它们一起带走。单独再 ALTER 一次
+            # 会报「不存在」（2026-11-18 实测：public.accounts_id_seq does not exist）。
+            # 独立的序列（不归属任何表）在本库不存在，故此处无需枚举。
+
+        moved_tables: list[str] = []
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+                for t in tables:
+                    cur.execute(f'ALTER TABLE "{PUBLIC_SCHEMA}"."{t}" SET SCHEMA "{schema}"')
+                    moved_tables.append(t)
+
+    finally:
+        get_pool(settings).putconn(conn)
+
+    # 审计写在**搬完之后**（此刻 audit 表已在目标 schema 里）。
+    try:
+        from .tenancy import audit as _audit
+
+        aconn = get_pool(settings).getconn()
+        try:
+            _audit(aconn, settings.tenant_id, "tenant_schema_adopted",
+                   target=schema,
+                   detail={"from": PUBLIC_SCHEMA, "to": schema,
+                           "tables": len(moved_tables)})
+        finally:
+            get_pool(settings).putconn(aconn)
+    except Exception:  # noqa: BLE001 - 审计失败不改变「已搬完」的事实
+        pass
+
+    return {"from": PUBLIC_SCHEMA, "to": schema, "tables": moved_tables}
+
+
 def assert_schema_version(settings: Settings) -> None:
     """fail-fast：库内记录版本落后于代码要求即拒绝服务，同时点名两侧版本。
 
