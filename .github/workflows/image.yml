@@ -1,0 +1,20 @@
+# 共享实现见 FindDataTechnology/fd-ci（openspec: extract-shared-ci-workflow）。
+# 本文件只声明「出什么镜像」，构建逻辑不在这里。
+#
+# 2026-11-21：本源仓此前没有出片 workflow，镜像一直靠通用池
+# `testaction00x/build-pool` 出（池已全部删除）。仓已公开，标准 runner
+# 免费无限，从此本源仓自己出片 —— 与 fd-info / fd-shared 同形态。
+name: image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-push:
+    uses: FindDataTechnology/fd-ci/.github/workflows/image-build.yml@main
+    secrets: inherit
+    with:
+      image: fd-erp-ledger-mcp
+      namespace: finddata-business
