@@ -7,11 +7,11 @@ name = "fd-erp-ledger-mcp"
 version = "0.1.0"
 description = "ERP 账本内核 MCP：复式事件账 + 确认车道 + 只读对账滩头，行业无关、多租户、多币种、append-only 存证。"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "FindDataTechnology" }]
 dependencies = [
-    "fastmcp>=3.4",
+    "fastmcp>=4.2.4,<5",
     "click",
     "uvicorn",
     "psycopg[binary,pool]>=3.1",
