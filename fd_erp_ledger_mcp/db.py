@@ -68,7 +68,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 #: 0021：通用科目补进项税额转出（change: add-cn-red-letter-and-input-transfer-out）——
 #:       2221.01.04 应交增值税（进项税额转出）。已抵扣进项在集体福利/非正常损失/免税或简易
 #:       计税时须转出；没有该科目，应纳增值税写不成「销项 − 进项 + 转出」，附加税基数跟着错。
-REQUIRED_SCHEMA_VERSION = "0021_cn_input_transfer_out_account"
+REQUIRED_SCHEMA_VERSION = "0022_retail_payment_event"
 
 _lock = threading.Lock()
 _pools: dict[str, Any] = {}
