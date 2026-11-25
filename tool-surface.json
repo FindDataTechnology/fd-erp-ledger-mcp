@@ -802,5 +802,89 @@
     "compliance_boundary": "二清红线：资金归集/代收代付/分账平台只做对账与核对指令层，资金走客户自选持牌通道；开票/税务申报不自研（挂账），账内可记录发票类事件参与对账、票据本体由客户既有合规渠道处理。信用占用为备忘性质，不执行资金放款/扣款。",
     "honest_caliber": "本 manifest 与 deploy 清单均为 publish-ready 工件：网关路由未上线、registry 快照未 live 写入、谦面市场未上架、镜像未构建。Live publish / gateway rollout / registry push / 官网 deploy 均属 DEPLOY 步骤（需 live 凭据），本 apply 挂账。",
     "no_internal_group": "32 工具全部 commercial，无 internal 组；消费侧暴露集 ⊆ commercial 集闭合。"
+  },
+  "rules": {
+    "commercial_exemptions": [
+      {
+        "tool": "approve_billing_rule",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "approve_posting_rule",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "bill_event",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "bill_period_snapshot",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "close_period",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "confirm_proposal",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "decide_event",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "ingest_event",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "post_event",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "project_event",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "reject_proposal",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "release_credit",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "reopen_period",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "reserve_credit",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "reverse_fee",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "run_reconciliation",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "submit_billing_rule",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "submit_event",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "submit_posting_rule",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      },
+      {
+        "tool": "submit_proposal",
+        "reason": "ERP 账本内核本身就是可写系统：agent 提交 proposal / 拟稿事件、确认门落账、计费与过账都是产品能力。这些写操作**不改变**「对外可售」这一判断——客户买的就是能记账。写路径的安全性由确认门 + 借贷必平 DB 约束 + append-only + 冲正（不改历史）保证，不是靠把它们移出 commercial。"
+      }
+    ]
   }
 }
