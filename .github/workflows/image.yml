@@ -18,3 +18,9 @@ jobs:
     with:
       image: fd-erp-ledger-mcp
       namespace: finddata-business
+      # 构建后、推 tag 前让镜像真启动一次。此前这里为空 ⇒ 「构建 success」只等于
+      # docker build 过了；2026-11-26 实测镜像能构建、却因迁移没跑而在 fd-prod
+      # CrashLoop 33 小时（`ErpError: 数据库 schema 版本落后于代码要求`）。
+      # fd-ci 把这段当 shell 跑，$IMG 是刚构建的本地镜像；内容真相在 scripts/ci-smoke.sh。
+      # 用 `bash <路径>` 一行转过去，避免两处维护同一段脚本。
+      smoke_script: bash scripts/ci-smoke.sh
